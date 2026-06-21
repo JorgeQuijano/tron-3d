@@ -1,0 +1,1461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TRON 3D — Light Cycles</title>
+<style>
+  :root {
+    --cyan: #00ffff;
+    --magenta: #ff2bd6;
+    --orange: #ff7a1a;
+    --red: #ff2a55;
+    --dim: #6a7280;
+    --bg: #03060a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: #d6f6ff;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', ui-monospace, monospace;
+    overflow: hidden;
+    user-select: none;
+  }
+  canvas { display: block; }
+  #app { position: fixed; inset: 0; }
+
+  /* ---------- HUD ---------- */
+  .hud {
+    position: fixed; pointer-events: none;
+    color: var(--cyan);
+    text-shadow: 0 0 6px rgba(0,255,255,.65), 0 0 14px rgba(0,255,255,.35);
+    letter-spacing: 1px;
+  }
+  #hud-top {
+    top: 14px; left: 14px;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  #hud-top .label { color: var(--dim); text-shadow: none; }
+  #hud-top .val   { color: var(--cyan); font-weight: 700; }
+  #hud-top .sep   { color: var(--dim); margin: 0 6px; }
+
+  #hud-topright {
+    top: 14px; right: 14px;
+    text-align: right;
+    font-size: 12px;
+    color: var(--dim);
+    line-height: 1.45;
+  }
+  #hud-topright .alive { color: #d0ffe5; }
+  #hud-topright .dead  { color: #ff5572; text-decoration: line-through; opacity: .55; }
+
+  #hud-bottom {
+    bottom: 14px; left: 50%;
+    transform: translateX(-50%);
+    font-size: 11px;
+    color: var(--dim);
+    text-align: center;
+    text-shadow: none;
+    letter-spacing: 1.5px;
+  }
+  #hud-bottom kbd {
+    display: inline-block;
+    min-width: 18px;
+    padding: 2px 6px;
+    margin: 0 2px;
+    border: 1px solid #2a3a45;
+    border-radius: 3px;
+    background: rgba(20,30,40,.55);
+    color: #cfeef9;
+    font-family: inherit;
+    font-size: 10px;
+  }
+
+  #powerup-bar {
+    position: fixed; bottom: 50px; left: 50%;
+    transform: translateX(-50%);
+    width: 220px; height: 6px;
+    border: 1px solid #2a3a45;
+    background: rgba(10,15,20,.55);
+    border-radius: 3px;
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity .25s;
+  }
+  #powerup-bar.show { opacity: 1; }
+  #powerup-bar .fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--cyan), #aaffff);
+    box-shadow: 0 0 10px var(--cyan);
+    width: 0%;
+    transition: width .12s linear;
+  }
+  #powerup-label {
+    position: fixed; bottom: 60px; left: 50%;
+    transform: translateX(-50%);
+    color: var(--cyan);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-shadow: 0 0 8px var(--cyan);
+    opacity: 0;
+    transition: opacity .25s;
+  }
+  #powerup-label.show { opacity: 1; }
+
+  /* ---------- Overlays ---------- */
+  .overlay {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at center, rgba(0,20,30,.55) 0%, rgba(0,0,0,.85) 75%);
+    backdrop-filter: blur(2px);
+    z-index: 10;
+    pointer-events: auto;
+  }
+  .overlay.hidden { display: none; }
+
+  .panel {
+    border: 1px solid #00ffff55;
+    background: rgba(0,15,25,.78);
+    box-shadow: 0 0 30px rgba(0,255,255,.15), inset 0 0 30px rgba(0,255,255,.05);
+    padding: 36px 44px;
+    max-width: 560px;
+    text-align: center;
+    border-radius: 4px;
+  }
+  .panel h1 {
+    font-size: 42px;
+    color: var(--cyan);
+    letter-spacing: 8px;
+    margin-bottom: 6px;
+    text-shadow: 0 0 12px var(--cyan), 0 0 28px rgba(0,255,255,.4);
+  }
+  .panel h2 {
+    font-size: 26px;
+    color: var(--magenta);
+    letter-spacing: 4px;
+    margin-bottom: 18px;
+    text-shadow: 0 0 10px var(--magenta);
+  }
+  .panel p {
+    font-size: 13px;
+    line-height: 1.7;
+    color: #b8d6e0;
+    margin: 10px 0;
+  }
+  .panel .tag {
+    display: inline-block;
+    margin: 4px 3px;
+    padding: 3px 8px;
+    border: 1px solid #2a3a45;
+    color: #cfeef9;
+    border-radius: 3px;
+    font-size: 11px;
+  }
+  .panel .tag.cyan { color: var(--cyan); border-color: var(--cyan); }
+  .panel .tag.mag { color: var(--magenta); border-color: var(--magenta); }
+  .panel .tag.orange { color: var(--orange); border-color: var(--orange); }
+  .panel .tag.red { color: var(--red); border-color: var(--red); }
+
+  .panel .stats {
+    display: flex; justify-content: center; gap: 28px;
+    margin: 18px 0 14px;
+  }
+  .panel .stat {
+    display: flex; flex-direction: column; align-items: center;
+  }
+  .panel .stat .v {
+    font-size: 28px; color: var(--cyan);
+    text-shadow: 0 0 8px var(--cyan);
+  }
+  .panel .stat .k {
+    font-size: 10px; color: var(--dim);
+    letter-spacing: 2px; margin-top: 4px;
+  }
+
+  .panel .hint {
+    margin-top: 18px;
+    font-size: 12px;
+    color: var(--dim);
+    letter-spacing: 2px;
+  }
+  .panel .hint kbd {
+    display: inline-block;
+    padding: 3px 8px;
+    margin: 0 2px;
+    border: 1px solid #2a3a45;
+    border-radius: 3px;
+    background: rgba(20,30,40,.55);
+    color: #cfeef9;
+  }
+  .panel .start {
+    pointer-events: auto;
+    cursor: pointer;
+    display: inline-block;
+    margin-top: 22px;
+    padding: 10px 28px;
+    border: 1px solid var(--cyan);
+    color: var(--cyan);
+    background: transparent;
+    font-family: inherit;
+    font-size: 13px;
+    letter-spacing: 4px;
+    border-radius: 2px;
+    text-shadow: 0 0 8px var(--cyan);
+    box-shadow: 0 0 12px rgba(0,255,255,.25), inset 0 0 12px rgba(0,255,255,.08);
+    transition: all .15s;
+  }
+  .panel .start:hover {
+    background: rgba(0,255,255,.08);
+    box-shadow: 0 0 22px rgba(0,255,255,.45), inset 0 0 18px rgba(0,255,255,.15);
+  }
+
+  .twist {
+    color: #ffe27a;
+    text-shadow: 0 0 6px rgba(255,226,122,.6);
+    font-size: 12px;
+    margin: 14px auto 0;
+    max-width: 420px;
+  }
+
+  /* Flash effect on damage */
+  .flash {
+    position: fixed; inset: 0;
+    background: rgba(255, 50, 90, .25);
+    pointer-events: none;
+    z-index: 5;
+    opacity: 0;
+    transition: opacity .15s;
+  }
+  .flash.on { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="flash" id="flash"></div>
+
+<!-- HUD -->
+<div id="hud-top" class="hud">
+  <div><span class="label">SCORE</span> <span class="val" id="score">0</span></div>
+  <div><span class="label">HIGH</span>  <span class="val" id="highscore">0</span></div>
+  <div><span class="label">TIME</span>  <span class="val" id="time">0.0</span><span class="label">s</span></div>
+  <div><span class="label">SPEED</span> <span class="val" id="speed">1.0</span><span class="label">x</span></div>
+</div>
+
+<div id="hud-topright" class="hud">
+  <div><span class="alive" id="ai1">AI-1 ●</span></div>
+  <div><span class="alive" id="ai2">AI-2 ●</span></div>
+  <div><span class="alive" id="ai3">AI-3 ●</span></div>
+</div>
+
+<div id="hud-bottom" class="hud">
+  <kbd>A</kbd><kbd>D</kbd> turn &nbsp;·&nbsp; <kbd>W</kbd> boost &nbsp;·&nbsp; <kbd>S</kbd> brake &nbsp;·&nbsp; <kbd>SPACE</kbd> power-up &nbsp;·&nbsp; <kbd>P</kbd> pause
+</div>
+
+<div id="powerup-label">SHIELD ACTIVE</div>
+<div id="powerup-bar"><div class="fill" id="powerup-fill"></div></div>
+
+<!-- Start overlay -->
+<div id="overlay-start" class="overlay">
+  <div class="panel">
+    <h1>TRON&nbsp;3D</h1>
+    <h2>LIGHT CYCLES</h2>
+    <p>You are the <span class="tag cyan">CYAN</span> cycle.</p>
+    <p>Three opponents: <span class="tag mag">MAGENTA</span> <span class="tag orange">ORANGE</span> <span class="tag red">RED</span>.</p>
+    <p>Hit any trail or the wall and you crash. Last one riding wins.</p>
+    <p class="twist">
+      ⚡ THE TWIST: trails <em>decay</em>. Each segment fades over 7 seconds before vanishing.
+      The arena rewrites itself — bait enemies into their own freshly-laid walls.
+    </p>
+    <button class="start" id="btn-start">ENGAGE</button>
+    <div class="hint">
+      <kbd>A</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>→</kbd> turn &nbsp;
+      <kbd>W</kbd> / <kbd>↑</kbd> boost &nbsp;
+      <kbd>S</kbd> / <kbd>↓</kbd> brake &nbsp;
+      <kbd>SPACE</kbd> shield &nbsp;
+      <kbd>P</kbd> pause
+    </div>
+  </div>
+</div>
+
+<!-- Pause overlay -->
+<div id="overlay-pause" class="overlay hidden">
+  <div class="panel">
+    <h1>PAUSED</h1>
+    <p class="hint"><kbd>P</kbd> to resume</p>
+  </div>
+</div>
+
+<!-- Game over overlay -->
+<div id="overlay-over" class="overlay hidden">
+  <div class="panel">
+    <h2 id="over-title">CYCLE DERESOLVED</h2>
+    <div class="stats">
+      <div class="stat"><div class="v" id="over-score">0</div><div class="k">SCORE</div></div>
+      <div class="stat"><div class="v" id="over-kills">0</div><div class="k">ELIMINATED</div></div>
+      <div class="stat"><div class="v" id="over-time">0.0s</div><div class="k">SURVIVED</div></div>
+      <div class="stat"><div class="v" id="over-high">0</div><div class="k">HIGH SCORE</div></div>
+    </div>
+    <p id="over-detail" style="color: var(--dim); font-size: 12px;"></p>
+    <button class="start" id="btn-restart">RE-ENGAGE</button>
+    <div class="hint"><kbd>R</kbd> or click to restart</div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://esm.sh/three@0.160.0",
+    "three/addons/": "https://esm.sh/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass }     from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass }     from 'three/addons/postprocessing/OutputPass.js';
+
+// ───────────────────────────────────────────────────────────────────────────
+// CONFIG
+// ───────────────────────────────────────────────────────────────────────────
+const CONFIG = {
+  ARENA:        100,     // half-size of arena (so 200x200 playing field)
+  CELL:         2,       // grid cell size
+  TRAIL_LIFE:   7.0,     // seconds before trail vanishes
+  BASE_SPEED:   22,      // units/sec
+  BOOST_SPEED:  36,      // units/sec
+  BRAKE_SPEED:  10,      // units/sec
+  TURN_RATE:    2.6,     // radians/sec (continuous turn while holding key)
+  TURN_SNAP:    Math.PI / 2, // 90° snap turn when buffered
+  AI_COUNT:     3,
+  POWERUP_DURATION: 4.0,
+  POWERUP_COOLDOWN: 12.0,
+  BLOOM_STRENGTH: 1.05,
+  BLOOM_RADIUS:   0.65,
+  BLOOM_THRESHOLD: 0.05,
+};
+
+const COLORS = {
+  bg:       new THREE.Color(0x03060a),
+  grid:     new THREE.Color(0x0a3a55),
+  gridBold: new THREE.Color(0x0e5b80),
+  player:   new THREE.Color(0x00ffff),
+  ai: [
+    new THREE.Color(0xff2bd6), // magenta
+    new THREE.Color(0xff7a1a), // orange
+    new THREE.Color(0xff2a55), // red
+  ],
+  wall:     new THREE.Color(0x66f5ff),
+};
+
+// ───────────────────────────────────────────────────────────────────────────
+// THREE.JS SETUP
+// ───────────────────────────────────────────────────────────────────────────
+const container = document.getElementById('app');
+const scene = new THREE.Scene();
+scene.background = COLORS.bg;
+scene.fog = new THREE.Fog(COLORS.bg, 80, 240);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, 600);
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+container.appendChild(renderer.domElement);
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  CONFIG.BLOOM_STRENGTH, CONFIG.BLOOM_RADIUS, CONFIG.BLOOM_THRESHOLD
+);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// ARENA — grid floor + bounding walls
+// ───────────────────────────────────────────────────────────────────────────
+function buildFloor() {
+  const size = CONFIG.ARENA * 2;
+  // Two-tone grid via shader for crispness
+  const geom = new THREE.PlaneGeometry(size, size, 1, 1);
+  const mat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: {
+      uGrid:    { value: CONFIG.CELL },
+      uSize:    { value: size },
+      uColor:   { value: COLORS.grid },
+      uBold:    { value: COLORS.gridBold },
+      uCenter:  { value: new THREE.Color(0x062535) },
+    },
+    vertexShader: /* glsl */`
+      varying vec2 vUv;
+      varying vec3 vWorld;
+      void main(){
+        vUv = uv;
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorld = wp.xyz;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: /* glsl */`
+      varying vec2 vUv;
+      varying vec3 vWorld;
+      uniform float uGrid;
+      uniform float uSize;
+      uniform vec3 uColor;
+      uniform vec3 uBold;
+      uniform vec3 uCenter;
+      float lineMask(float v){
+        float w = fwidth(v) * 1.5;
+        return 1.0 - smoothstep(0.0, w, abs(v - 0.5));
+      }
+      void main(){
+        vec2 g = abs(fract(vWorld.xz / uGrid - 0.5) - 0.5) * uGrid;
+        float minor = lineMask(g.x) + lineMask(g.y);
+        float majorMult = 5.0;
+        vec2 g2 = abs(fract(vWorld.xz / (uGrid * majorMult) - 0.5) - 0.5) * (uGrid * majorMult);
+        float major = lineMask(g2.x) + lineMask(g2.y);
+        float dist = length(vWorld.xz) / (uSize * 0.5);
+        float vignette = smoothstep(1.0, 0.2, dist);
+        vec3 col = uCenter + uColor * minor * 0.35 + uBold * major * 0.7;
+        col *= 0.5 + 0.5 * vignette;
+        float a = clamp(minor * 0.45 + major * 0.85, 0.0, 1.0);
+        a *= mix(0.35, 1.0, vignette);
+        gl_FragColor = vec4(col, a);
+      }
+    `,
+  });
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = 0;
+  scene.add(mesh);
+  return mesh;
+}
+
+function buildWalls() {
+  const grp = new THREE.Group();
+  const h = 1.2;
+  const t = 0.4;
+  const a = CONFIG.ARENA;
+  const mat = new THREE.MeshBasicMaterial({
+    color: COLORS.wall,
+    transparent: true,
+    opacity: 0.85,
+  });
+  // 4 walls
+  const sides = [
+    [a * 2 + t, h, t,  0,        h / 2,  a + t / 2],
+    [a * 2 + t, h, t,  0,        h / 2, -a - t / 2],
+    [t, h, a * 2 + t,  a + t / 2, h / 2,  0],
+    [t, h, a * 2 + t, -a - t / 2, h / 2,  0],
+  ];
+  for (const [w, ht, d, x, y, z] of sides) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, ht, d), mat);
+    m.position.set(x, y, z);
+    grp.add(m);
+  }
+  // glow line on top edge
+  const edgeMat = new THREE.MeshBasicMaterial({ color: 0xaaeeff });
+  for (let i = 0; i < 4; i++) {
+    const isHoriz = i < 2;
+    const len = a * 2;
+    const edge = new THREE.Mesh(
+      new THREE.BoxGeometry(len + (isHoriz ? 0.4 : 0.05), 0.08, 0.08),
+      edgeMat
+    );
+    edge.position.y = h;
+    edge.position.z = (i === 0 ? a : -a);
+    edge.position.x = 0;
+    if (!isHoriz) {
+      edge.rotation.y = Math.PI / 2;
+      edge.position.z = 0;
+      edge.position.x = (i === 2 ? a : -a);
+    }
+    grp.add(edge);
+  }
+  scene.add(grp);
+  return grp;
+}
+
+const floorMesh = buildFloor();
+const walls = buildWalls();
+
+// ───────────────────────────────────────────────────────────────────────────
+// LIGHT CYCLE — visible body
+// ───────────────────────────────────────────────────────────────────────────
+function buildCycleMesh(color) {
+  const grp = new THREE.Group();
+
+  // Body — sleek elongated capsule
+  const body = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.55, 1.4, 6, 12),
+    new THREE.MeshStandardMaterial({
+      color: color,
+      emissive: color,
+      emissiveIntensity: 1.2,
+      metalness: 0.4,
+      roughness: 0.35,
+    })
+  );
+  body.rotation.z = Math.PI / 2; // lay horizontally
+  body.position.y = 0.55;
+  grp.add(body);
+
+  // Cockpit / front nose
+  const nose = new THREE.Mesh(
+    new THREE.ConeGeometry(0.5, 0.9, 12),
+    new THREE.MeshStandardMaterial({
+      color: 0x081820,
+      emissive: color,
+      emissiveIntensity: 0.4,
+      metalness: 0.7,
+      roughness: 0.25,
+    })
+  );
+  nose.rotation.z = -Math.PI / 2;
+  nose.position.set(1.3, 0.55, 0);
+  grp.add(nose);
+
+  // Trail emitter disc (glow at rear)
+  const disc = new THREE.Mesh(
+    new THREE.CircleGeometry(0.65, 16),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 })
+  );
+  disc.rotation.y = Math.PI;
+  disc.position.set(-0.95, 0.4, 0);
+  grp.add(disc);
+
+  // Soft point light for local glow
+  const pl = new THREE.PointLight(color, 1.6, 14, 2.0);
+  pl.position.set(0, 0.8, 0);
+  grp.add(pl);
+
+  grp.userData.pointLight = pl;
+  return grp;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// TRAILS — fading ribbon segments
+// ───────────────────────────────────────────────────────────────────────────
+class Trail {
+  constructor(color, owner) {
+    this.color = color;
+    this.owner = owner; // cycle reference (for immunity ignore)
+    this.segments = []; // {x1,z1,x2,z2, born}
+    this.geometry = new THREE.BufferGeometry();
+    this.material = new THREE.LineBasicMaterial({
+      color: color,
+      transparent: true,
+      opacity: 1.0,
+      linewidth: 1,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    this.mesh = new THREE.LineSegments(this.geometry, this.material);
+    this.mesh.frustumCulled = false;
+
+    // Secondary glow underlay (thicker, semi-transparent)
+    this.glowGeometry = new THREE.BufferGeometry();
+    this.glowMaterial = new THREE.LineBasicMaterial({
+      color: color,
+      transparent: true,
+      opacity: 0.4,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    this.glowMesh = new THREE.LineSegments(this.glowGeometry, this.glowMaterial);
+    this.glowMesh.frustumCulled = false;
+
+    scene.add(this.mesh);
+    scene.add(this.glowMesh);
+
+    this._posBuffer = null;
+    this._dirty = false;
+  }
+
+  addSegment(x1, z1, x2, z2, now) {
+    // Merge with previous segment if it shares an endpoint (continuity)
+    const last = this.segments[this.segments.length - 1];
+    let nx1 = x1, nz1 = z1, nx2 = x2, nz2 = z2;
+    if (last && Math.abs(last.x2 - nx1) < 1e-3 && Math.abs(last.z2 - nz1) < 1e-3) {
+      last.x2 = nx2; last.z2 = nz2;
+    } else {
+      this.segments.push({ x1: nx1, z1: nz1, x2: nx2, z2: nz2, born: now });
+    }
+    this._dirty = true;
+  }
+
+  prune(now) {
+    let removed = false;
+    while (this.segments.length && now - this.segments[0].born > CONFIG.TRAIL_LIFE) {
+      this.segments.shift();
+      removed = true;
+    }
+    if (removed) this._dirty = true;
+    return removed;
+  }
+
+  rebuild() {
+    // Two passes: main line + a slight outward offset "glow" line for thickness illusion
+    const N = this.segments.length;
+    const basePts = new Float32Array(Math.max(2, N) * 2 * 3);
+    const glowPts = new Float32Array(Math.max(2, N) * 2 * 3);
+    const colArr = new Float32Array(Math.max(2, N) * 2 * 3);
+    let writeIdx = 0;
+    for (let i = 0; i < N; i++) {
+      const s = this.segments[i];
+      basePts[writeIdx * 3 + 0] = s.x1;
+      basePts[writeIdx * 3 + 1] = 0.1;
+      basePts[writeIdx * 3 + 2] = s.z1;
+      basePts[writeIdx * 3 + 3] = s.x2;
+      basePts[writeIdx * 3 + 4] = 0.1;
+      basePts[writeIdx * 3 + 5] = s.z2;
+      // glow offset perpendicular
+      const dx = s.x2 - s.x1, dz = s.z2 - s.z1;
+      const len = Math.hypot(dx, dz) || 1;
+      const nx = -dz / len, nz = dx / len;
+      const OFF = 0.35;
+      glowPts[writeIdx * 3 + 0] = s.x1 + nx * OFF;
+      glowPts[writeIdx * 3 + 1] = 0.08;
+      glowPts[writeIdx * 3 + 2] = s.z1 + nz * OFF;
+      glowPts[writeIdx * 3 + 3] = s.x2 + nx * OFF;
+      glowPts[writeIdx * 3 + 4] = 0.08;
+      glowPts[writeIdx * 3 + 5] = s.z2 + nz * OFF;
+      writeIdx += 2;
+    }
+    this.geometry.setAttribute('position', new THREE.BufferAttribute(basePts.subarray(0, writeIdx * 3), 3));
+    this.glowGeometry.setAttribute('position', new THREE.BufferAttribute(glowPts.subarray(0, writeIdx * 3), 3));
+    this.geometry.computeBoundingSphere();
+    this.glowGeometry.computeBoundingSphere();
+  }
+
+  syncAlpha(now) {
+    // global opacity = average fade of segments (or just use material opacity scaled to life)
+    let totalAlpha = 0;
+    for (const s of this.segments) {
+      const age = now - s.born;
+      totalAlpha += 1 - (age / CONFIG.TRAIL_LIFE);
+    }
+    const a = this.segments.length ? totalAlpha / this.segments.length : 0;
+    this.material.opacity = Math.max(0.15, a);
+    this.glowMaterial.opacity = Math.max(0.05, a * 0.45);
+  }
+
+  /**
+   * Distance from point (x,z) to any segment (in xz plane).
+   * @param ignoreYoungerThanMs skip segments younger than this many ms
+   *        (prevents self-collision with the cycle's own fresh trail head).
+   *        Pass Number.POSITIVE_INFINITY (default) to check all segments.
+   */
+  distanceToPoint(x, z, ignoreYoungerThanMs = Number.POSITIVE_INFINITY) {
+    const segs = this.segments;
+    const now = performance.now();
+    let min = Infinity;
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      if (now - s.born < ignoreYoungerThanMs) continue;
+      const d = pointToSegmentDist(x, z, s.x1, s.z1, s.x2, s.z2);
+      if (d < min) min = d;
+      if (min < 0.5) return min; // early-out
+    }
+    return min;
+  }
+
+  segmentCount() { return this.segments.length; }
+
+  dispose() {
+    scene.remove(this.mesh);
+    scene.remove(this.glowMesh);
+    this.geometry.dispose();
+    this.glowGeometry.dispose();
+    this.material.dispose();
+    this.glowMaterial.dispose();
+  }
+}
+
+function pointToSegmentDist(px, pz, x1, z1, x2, z2) {
+  const dx = x2 - x1, dz = z2 - z1;
+  const len2 = dx * dx + dz * dz;
+  if (len2 < 1e-6) {
+    return Math.hypot(px - x1, pz - z1);
+  }
+  let t = ((px - x1) * dx + (pz - z1) * dz) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const cx = x1 + t * dx, cz = z1 + t * dz;
+  return Math.hypot(px - cx, pz - cz);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// CYCLE
+// ───────────────────────────────────────────────────────────────────────────
+class Cycle {
+  constructor(opts) {
+    this.id = opts.id;
+    this.name = opts.name;
+    this.color = opts.color;
+    this.isPlayer = !!opts.isPlayer;
+    this.isAI = !!opts.isAI;
+    this.alive = true;
+
+    this.position = new THREE.Vector2(opts.x, opts.z); // (x, z) on XZ plane
+    this.heading = opts.heading; // radians, 0 = +X, increasing CCW
+    this.speed = CONFIG.BASE_SPEED;
+
+    // Turning — player holds keys, AI may queue 90° turns
+    this.turnInput = 0;     // -1, 0, +1 (continuous)
+    this.queuedTurn = 0;    // -1 or +1, applies once when input is released
+    this._lastTurnApplied = -1;
+
+    // Trail
+    this.trail = new Trail(this.color, this);
+
+    // Mesh
+    this.mesh = buildCycleMesh(this.color);
+    this.mesh.position.set(opts.x, 0, opts.z);
+    this.mesh.rotation.y = -this.heading;
+    scene.add(this.mesh);
+
+    // Boost / brake
+    this.throttle = 0; // -1 brake, 0 normal, +1 boost
+
+    // Power-up state (player only)
+    this.powerupActive = 0;   // seconds remaining
+    this.powerupCooldown = 0;  // seconds until ready again
+
+    // AI state
+    this.aiTurnTimer = 0;
+    // Delay first AI turn so they don't pivot on frame 1 before the game feels settled
+    this.aiNextDecisionAt = 0.8 + Math.random() * 0.6;
+    this.aiTargetHeading = this.heading;
+
+    // Scoring (player only)
+    this.score = 0;
+    this.eliminations = 0;
+
+    // Particle burst on death
+    this._particles = null;
+  }
+
+  setHeading(h) {
+    // normalize to [-PI, PI]
+    while (h >  Math.PI) h -= Math.PI * 2;
+    while (h <= -Math.PI) h += Math.PI * 2;
+    this.heading = h;
+    this.aiTargetHeading = h;
+  }
+
+  update(dt, now, world) {
+    if (!this.alive) return;
+
+    // ── Player input handling ────────────────────────────────────────────
+    if (this.isPlayer) {
+      // Continuous turning while holding
+      if (input.left)  this.turnInput = +1;
+      else if (input.right) this.turnInput = -1;
+      else {
+        // Release → consume buffer once for a 90° snap (optional flavor)
+        if (this.turnInput !== 0 && this.queuedTurn !== 0) {
+          this.setHeading(this.heading + this.queuedTurn * CONFIG.TURN_SNAP);
+          this.queuedTurn = 0;
+          audio.whoosh();
+        }
+        this.turnInput = 0;
+      }
+      // Buffered turns (alternate taps)
+      if (input.leftJustPressed && !input.right)  this.queuedTurn = +1;
+      if (input.rightJustPressed && !input.left)  this.queuedTurn = -1;
+
+      this.heading += this.turnInput * CONFIG.TURN_RATE * dt;
+
+      // Throttle
+      if (input.up)        this.throttle = +1;
+      else if (input.down) this.throttle = -1;
+      else                 this.throttle = 0;
+
+      // Power-up
+      if (input.spaceJustPressed && this.powerupCooldown <= 0) {
+        this.powerupActive = CONFIG.POWERUP_DURATION;
+        this.powerupCooldown = CONFIG.POWERUP_COOLDOWN;
+        audio.powerup();
+      }
+    }
+
+    // ── AI logic ─────────────────────────────────────────────────────────
+    if (this.isAI && this.alive) {
+      this._aiUpdate(dt, now, world);
+    }
+
+    // Apply heading
+    this.setHeading(this.heading);
+    // Speed
+    let target;
+    if (this.throttle > 0)       target = CONFIG.BOOST_SPEED;
+    else if (this.throttle < 0)  target = CONFIG.BRAKE_SPEED;
+    else                          target = CONFIG.BASE_SPEED;
+    // Power-up grants slight speed boost too
+    if (this.powerupActive > 0) target *= 1.1;
+    this.speed += (target - this.speed) * Math.min(1, dt * 6);
+
+    // Move
+    const vx = Math.cos(this.heading) * this.speed;
+    const vz = -Math.sin(this.heading) * this.speed;
+    const newX = this.position.x + vx * dt;
+    const newZ = this.position.y + vz * dt;
+
+    // Add trail segment from current → new position
+    this.trail.addSegment(this.position.x, this.position.y, newX, newZ, now);
+    this.position.set(newX, newZ);
+
+    // Update mesh
+    this.mesh.position.set(newX, 0, newZ);
+    this.mesh.rotation.y = -this.heading;
+
+    // Power-up timers
+    if (this.powerupActive > 0) {
+      this.powerupActive = Math.max(0, this.powerupActive - dt);
+      // Flash cycle body during shield
+      const flash = Math.sin(now * 18) > 0;
+      this.mesh.children[0].material.emissiveIntensity = flash ? 2.4 : 1.2;
+    } else if (this.isPlayer) {
+      this.mesh.children[0].material.emissiveIntensity = 1.2;
+    }
+    if (this.powerupCooldown > 0) {
+      this.powerupCooldown = Math.max(0, this.powerupCooldown - dt);
+    }
+  }
+
+  _aiUpdate(dt, now, world) {
+    // Look-ahead: cast a ray forward; check for nearby trail segments or walls.
+    // If something close, queue a 90° turn toward the side with more room.
+    const lookAhead = 12;
+    const fx = Math.cos(this.heading) * lookAhead;
+    const fz = -Math.sin(this.heading) * lookAhead;
+    const tx = this.position.x + fx;
+    const tz = this.position.y + fz;
+
+    // Distance to nearest trail ahead (any cycle's trail)
+    let danger = false;
+    for (const c of world.cycles) {
+      if (!c.alive || c === this) continue;
+      const d = c.trail.distanceToPoint(tx, tz);
+      if (d < 3.5) { danger = true; break; }
+    }
+    // Wall ahead?
+    if (Math.abs(tx) > CONFIG.ARENA - 4 || Math.abs(tz) > CONFIG.ARENA - 4) danger = true;
+
+    if (danger || this.aiNextDecisionAt < now) {
+      // Decide: +90 or -90 — pick the side whose forward-lookahead is safer
+      const h1 = this.heading + Math.PI / 2;
+      const h2 = this.heading - Math.PI / 2;
+      const scoreDir = (h) => {
+        const lx = this.position.x + Math.cos(h) * lookAhead;
+        const lz = this.position.y + -Math.sin(h) * lookAhead;
+        let s = 0;
+        // Reward distance from walls
+        const wallMargin = CONFIG.ARENA - Math.max(Math.abs(lx), Math.abs(lz));
+        s += Math.max(0, wallMargin);
+        // Reward open space (no nearby trails)
+        for (const c of world.cycles) {
+          if (!c.alive || c === this) continue;
+          const d = c.trail.distanceToPoint(lx, lz);
+          if (d < 4) s -= 50;
+          else s += Math.min(8, d);
+        }
+        // Slight randomness
+        s += Math.random() * 2;
+        return s;
+      };
+      const left = scoreDir(h1);
+      const right = scoreDir(h2);
+      const turn = (left > right) ? +1 : -1;
+      this.setHeading(this.heading + turn * Math.PI / 2);
+      this.aiNextDecisionAt = now + 0.6 + Math.random() * 1.4;
+    }
+  }
+
+  die(causeX, causeZ, world) {
+    if (!this.alive) return;
+    this.alive = false;
+    // Particle burst at cycle position
+    this._spawnParticles(this.position.x, this.position.y, this.color, world);
+    audio.crash();
+    // Hide mesh
+    this.mesh.visible = false;
+    // For non-player causes, reward player if a kill
+    if (!this.isPlayer && world.player.alive) {
+      world.player.eliminations += 1;
+      world.player.score += 100;
+      audio.score();
+    }
+    // Flash screen if player died
+    if (this.isPlayer) {
+      const flash = document.getElementById('flash');
+      flash.classList.add('on');
+      setTimeout(() => flash.classList.remove('on'), 180);
+    }
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// PARTICLE BURST (small instanced mesh debris)
+// ───────────────────────────────────────────────────────────────────────────
+class ParticleSystem {
+  constructor(maxParticles = 800) {
+    this.max = maxParticles;
+    const geom = new THREE.TetrahedronGeometry(0.35, 0);
+    const mat = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 1.0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    this.mesh = new THREE.InstancedMesh(geom, mat, maxParticles);
+    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.mesh.frustumCulled = false;
+    scene.add(this.mesh);
+
+    this._colorAttr = new THREE.InstancedBufferAttribute(new Float32Array(maxParticles * 3), 3);
+    this.mesh.geometry.setAttribute('color', this._colorAttr);
+
+    this.particles = [];
+    for (let i = 0; i < maxParticles; i++) {
+      this.particles.push({
+        active: false,
+        x: 0, y: 0, z: 0,
+        vx: 0, vy: 0, vz: 0,
+        rot: 0, rx: 0, ry: 0, rz: 0,
+        life: 0, maxLife: 1,
+        r: 1, g: 1, b: 1,
+      });
+    }
+    this._tmpMat = new THREE.Matrix4();
+    this._tmpQuat = new THREE.Quaternion();
+    this._tmpScale = new THREE.Vector3();
+    this._tmpPos = new THREE.Vector3();
+  }
+
+  spawn(x, z, color, count = 40) {
+    let spawned = 0;
+    for (let i = 0; i < this.max && spawned < count; i++) {
+      const p = this.particles[i];
+      if (p.active) continue;
+      p.active = true;
+      p.x = x; p.y = 0.6 + Math.random() * 0.4; p.z = z;
+      const ang = Math.random() * Math.PI * 2;
+      const sp = 6 + Math.random() * 12;
+      p.vx = Math.cos(ang) * sp;
+      p.vy = 4 + Math.random() * 8;
+      p.vz = Math.sin(ang) * sp;
+      p.rx = Math.random() * 6 - 3;
+      p.ry = Math.random() * 6 - 3;
+      p.rz = Math.random() * 6 - 3;
+      p.rot = Math.random() * Math.PI * 2;
+      p.maxLife = 0.9 + Math.random() * 0.6;
+      p.life = p.maxLife;
+      p.r = color.r;
+      p.g = color.g;
+      p.b = color.b;
+      spawned++;
+    }
+  }
+
+  update(dt) {
+    const m = this._tmpMat;
+    const q = this._tmpQuat;
+    const s = this._tmpScale;
+    const v = this._tmpPos;
+    const colArr = this._colorAttr.array;
+    let any = false;
+    for (let i = 0; i < this.max; i++) {
+      const p = this.particles[i];
+      if (!p.active) {
+        s.set(0, 0, 0);
+        m.compose(v.set(0, -1000, 0), q.identity(), s);
+        this.mesh.setMatrixAt(i, m);
+        colArr[i * 3 + 0] = 0;
+        colArr[i * 3 + 1] = 0;
+        colArr[i * 3 + 2] = 0;
+        continue;
+      }
+      any = true;
+      p.life -= dt;
+      if (p.life <= 0) { p.active = false; continue; }
+      // physics
+      p.vy -= 18 * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.z += p.vz * dt;
+      p.vx *= 0.96;
+      p.vz *= 0.96;
+      p.rot += (p.rx + p.ry + p.rz) * dt;
+      const k = p.life / p.maxLife;
+      v.set(p.x, Math.max(0.1, p.y), p.z);
+      q.setFromEuler(new THREE.Euler(p.rot * 0.7, p.rot, p.rot * 0.5));
+      const scale = 0.4 + 1.4 * k;
+      s.set(scale, scale, scale);
+      m.compose(v, q, s);
+      this.mesh.setMatrixAt(i, m);
+      colArr[i * 3 + 0] = p.r * k;
+      colArr[i * 3 + 1] = p.g * k;
+      colArr[i * 3 + 2] = p.b * k;
+    }
+    this.mesh.instanceMatrix.needsUpdate = true;
+    this._colorAttr.needsUpdate = true;
+    // Hide entirely when nothing active to save draw
+    this.mesh.visible = any;
+  }
+}
+
+const particles = new ParticleSystem(900);
+Cycle.prototype._spawnParticles = function (x, z, color) {
+  particles.spawn(x, z, color, 60);
+};
+
+// ───────────────────────────────────────────────────────────────────────────
+// COLLISION
+// ───────────────────────────────────────────────────────────────────────────
+function checkCollisions(world) {
+  for (const c of world.cycles) {
+    if (!c.alive) continue;
+    const px = c.position.x, pz = c.position.y;
+    // Walls
+    if (Math.abs(px) > CONFIG.ARENA - 0.4 || Math.abs(pz) > CONFIG.ARENA - 0.4) {
+      c.die(px, pz, world);
+      continue;
+    }
+    // Trails
+    let hit = false;
+    for (const other of world.cycles) {
+      if (!other.alive && other.trail.segmentCount() === 0) continue;
+      // Player shield: ignore own trail entirely while active (still vulnerable to AI trails)
+      if (c.isPlayer && c.powerupActive > 0 && other === c) continue;
+      // Skip own trail segments younger than ~150ms — the trail head sits exactly
+      // under the cycle and we don't want instant self-death. Older segments
+      // still kill normally (you DO die if you run into your own past trail).
+      const ignoreMs = (other === c) ? 150 : 0;
+      const d = other.trail.distanceToPoint(px, pz, ignoreMs);
+      if (d < 0.55) { hit = true; break; }
+    }
+    if (hit) c.die(px, pz, world);
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// AUDIO — procedural via Web Audio API
+// ───────────────────────────────────────────────────────────────────────────
+const audio = (() => {
+  let ctx = null;
+  let masterGain = null;
+  let engineOsc = null;
+  let engineGain = null;
+  let started = false;
+  function init() {
+    if (ctx) return;
+    try {
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      masterGain = ctx.createGain();
+      masterGain.gain.value = 0.5;
+      masterGain.connect(ctx.destination);
+    } catch (e) {
+      console.warn('AudioContext failed:', e);
+    }
+  }
+  function startEngine() {
+    if (!ctx || engineOsc) return;
+    engineOsc = ctx.createOscillator();
+    engineGain = ctx.createGain();
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 800;
+    engineOsc.type = 'sawtooth';
+    engineOsc.frequency.value = 80;
+    engineGain.gain.value = 0.0;
+    engineOsc.connect(filter); filter.connect(engineGain); engineGain.connect(masterGain);
+    engineOsc.start();
+    started = true;
+  }
+  function setEngine(level, speed) {
+    if (!engineOsc) return;
+    const targetGain = level * 0.18;
+    const targetFreq = 60 + speed * 4;
+    const t = ctx.currentTime;
+    engineGain.gain.linearRampToValueAtTime(targetGain, t + 0.05);
+    engineOsc.frequency.linearRampToValueAtTime(targetFreq, t + 0.05);
+  }
+  function stopEngine() {
+    if (!engineOsc) return;
+    try { engineOsc.stop(); } catch (e) {}
+    engineOsc = null; engineGain = null;
+  }
+  function crash() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.4, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      const k = 1 - i / data.length;
+      data[i] = (Math.random() * 2 - 1) * k * k * 0.9;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const g = ctx.createGain();
+    g.gain.value = 0.6;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(2400, t);
+    filter.frequency.exponentialRampToValueAtTime(120, t + 0.4);
+    src.connect(filter); filter.connect(g); g.connect(masterGain);
+    src.start(t);
+  }
+  function whoosh() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(220, t);
+    osc.frequency.exponentialRampToValueAtTime(880, t + 0.12);
+    g.gain.setValueAtTime(0.0, t);
+    g.gain.linearRampToValueAtTime(0.18, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+    osc.connect(g); g.connect(masterGain);
+    osc.start(t); osc.stop(t + 0.2);
+  }
+  function powerup() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    [440, 660, 880, 1320].forEach((f, i) => {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(f, t + i * 0.07);
+      g.gain.setValueAtTime(0.0, t + i * 0.07);
+      g.gain.linearRampToValueAtTime(0.14, t + i * 0.07 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.07 + 0.18);
+      osc.connect(g); g.connect(masterGain);
+      osc.start(t + i * 0.07); osc.stop(t + i * 0.07 + 0.2);
+    });
+  }
+  function score() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(660, t);
+    osc.frequency.setValueAtTime(990, t + 0.08);
+    g.gain.setValueAtTime(0.0, t);
+    g.gain.linearRampToValueAtTime(0.18, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+    osc.connect(g); g.connect(masterGain);
+    osc.start(t); osc.stop(t + 0.3);
+  }
+  return { init, startEngine, setEngine, stopEngine, crash, whoosh, powerup, score };
+})();
+
+// ───────────────────────────────────────────────────────────────────────────
+// INPUT
+// ───────────────────────────────────────────────────────────────────────────
+const input = {
+  left: false, right: false, up: false, down: false, space: false,
+  leftJustPressed: false, rightJustPressed: false, spaceJustPressed: false,
+  _pressed: { left: false, right: false, space: false },
+};
+function bindKeys() {
+  const map = (code, key) => ({ code, key });
+  const handlers = {
+    ArrowLeft: 'left',  KeyA: 'left',
+    ArrowRight: 'right', KeyD: 'right',
+    ArrowUp: 'up',  KeyW: 'up',
+    ArrowDown: 'down', KeyS: 'down',
+    Space: 'space',
+  };
+  window.addEventListener('keydown', (e) => {
+    const k = handlers[e.code];
+    if (!k) return;
+    if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code)) e.preventDefault();
+    input[k] = true;
+    if (k === 'left'  && !input._pressed.left)  { input.leftJustPressed  = true; input._pressed.left  = true; }
+    if (k === 'right' && !input._pressed.right) { input.rightJustPressed = true; input._pressed.right = true; }
+    if (k === 'space' && !input._pressed.space) { input.spaceJustPressed = true; input._pressed.space = true; }
+    if (e.code === 'KeyR' && (state === 'over')) restart();
+    if (e.code === 'KeyP' && (state === 'play' || state === 'paused')) togglePause();
+    if (e.code === 'Enter' && state === 'start') startGame();
+  });
+  window.addEventListener('keyup', (e) => {
+    const k = handlers[e.code];
+    if (!k) return;
+    input[k] = false;
+    if (k === 'left')  input._pressed.left  = false;
+    if (k === 'right') input._pressed.right = false;
+    if (k === 'space') input._pressed.space = false;
+  });
+  // Click on overlays
+  document.getElementById('btn-start').addEventListener('click', startGame);
+  document.getElementById('btn-restart').addEventListener('click', restart);
+}
+bindKeys();
+
+// ───────────────────────────────────────────────────────────────────────────
+// WORLD / GAME STATE
+// ───────────────────────────────────────────────────────────────────────────
+let state = 'start'; // 'start' | 'play' | 'paused' | 'over'
+let world = null;
+let clock = new THREE.Clock();
+let elapsed = 0;
+let playerStartTime = 0;
+
+function buildWorld() {
+  const cycles = [];
+  const player = new Cycle({
+    id: 0, name: 'PLAYER', color: COLORS.player,
+    isPlayer: true,
+    x: -CONFIG.ARENA * 0.6, z: 0, heading: 0,
+  });
+  cycles.push(player);
+
+  // Spawn AIs at corners, facing inward
+  const starts = [
+    { x:  CONFIG.ARENA * 0.6, z: -CONFIG.ARENA * 0.55, heading: Math.PI },          // magenta from right, facing left
+    { x: -CONFIG.ARENA * 0.05, z:  CONFIG.ARENA * 0.6,  heading: -Math.PI / 2 },     // orange from top, facing down
+    { x:  CONFIG.ARENA * 0.55, z:  CONFIG.ARENA * 0.55, heading: -Math.PI * 0.75 },  // red from top-right, facing diagonal
+  ];
+  for (let i = 0; i < CONFIG.AI_COUNT; i++) {
+    cycles.push(new Cycle({
+      id: i + 1,
+      name: 'AI-' + (i + 1),
+      color: COLORS.ai[i],
+      isAI: true,
+      x: starts[i].x, z: starts[i].z, heading: starts[i].heading,
+    }));
+  }
+  return { cycles, player };
+}
+
+function clearWorld() {
+  if (!world) return;
+  for (const c of world.cycles) {
+    scene.remove(c.mesh);
+    c.trail.dispose();
+  }
+  world = null;
+  particles.particles.forEach(p => p.active = false);
+}
+
+function startGame() {
+  audio.init();
+  audio.startEngine();
+  clearWorld();
+  world = buildWorld();
+  elapsed = 0;
+  playerStartTime = 0;
+  state = 'play';
+  document.getElementById('overlay-start').classList.add('hidden');
+  document.getElementById('overlay-over').classList.add('hidden');
+  document.getElementById('overlay-pause').classList.add('hidden');
+  updateHUD();
+}
+
+function restart() {
+  startGame();
+}
+
+function togglePause() {
+  if (state === 'play') {
+    state = 'paused';
+    document.getElementById('overlay-pause').classList.remove('hidden');
+  } else if (state === 'paused') {
+    state = 'play';
+    document.getElementById('overlay-pause').classList.add('hidden');
+  }
+}
+
+function gameOver() {
+  state = 'over';
+  const p = world.player;
+  const high = Number(localStorage.getItem('tron3d.high') || 0);
+  const isHigh = p.score > high;
+  if (isHigh) localStorage.setItem('tron3d.high', String(p.score));
+
+  document.getElementById('over-title').textContent = p.alive ? 'VICTORY' : 'CYCLE DERESOLVED';
+  document.getElementById('over-score').textContent = p.score;
+  document.getElementById('over-kills').textContent = p.eliminations;
+  document.getElementById('over-time').textContent = (elapsed - playerStartTime).toFixed(1) + 's';
+  document.getElementById('over-high').textContent = Math.max(high, p.score);
+  document.getElementById('over-detail').textContent = isHigh
+    ? '★ NEW HIGH SCORE ★'
+    : `High score: ${Math.max(high, p.score)}`;
+  document.getElementById('overlay-over').classList.remove('hidden');
+  audio.stopEngine();
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// CAMERA
+// ───────────────────────────────────────────────────────────────────────────
+const camTarget = new THREE.Vector3();
+const camDesired = new THREE.Vector3();
+function updateCamera(dt) {
+  if (!world) return;
+  const p = world.player;
+  // Anchor slightly ahead of player
+  const ahead = 4;
+  camTarget.set(
+    p.position.x + Math.cos(p.heading) * ahead,
+    0,
+    p.position.y - Math.sin(p.heading) * ahead
+  );
+  const dist = 32;
+  const height = 22;
+  camDesired.set(
+    camTarget.x - Math.cos(p.heading) * dist,
+    height,
+    camTarget.z + Math.sin(p.heading) * dist
+  );
+  // smooth follow
+  const a = Math.min(1, dt * 4);
+  camera.position.lerp(camDesired, a);
+  // look at slightly ahead of player
+  const lookAt = new THREE.Vector3(
+    p.position.x + Math.cos(p.heading) * 6,
+    1.0,
+    p.position.y - Math.sin(p.heading) * 6
+  );
+  // smooth target too
+  if (!camera.userData.smoothLook) camera.userData.smoothLook = new THREE.Vector3().copy(lookAt);
+  camera.userData.smoothLook.lerp(lookAt, a);
+  camera.lookAt(camera.userData.smoothLook);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// HUD
+// ───────────────────────────────────────────────────────────────────────────
+const hudEls = {
+  score: document.getElementById('score'),
+  high:  document.getElementById('highscore'),
+  time:  document.getElementById('time'),
+  speed: document.getElementById('speed'),
+  ai: [document.getElementById('ai1'), document.getElementById('ai2'), document.getElementById('ai3')],
+  powerFill: document.getElementById('powerup-fill'),
+  powerBar:  document.getElementById('powerup-bar'),
+  powerLbl:  document.getElementById('powerup-label'),
+};
+function updateHUD() {
+  if (!world) return;
+  hudEls.score.textContent = world.player.score;
+  hudEls.high.textContent  = Number(localStorage.getItem('tron3d.high') || 0);
+  hudEls.time.textContent  = (elapsed - playerStartTime).toFixed(1);
+  hudEls.speed.textContent = (world.player.speed / CONFIG.BASE_SPEED).toFixed(2);
+  for (let i = 0; i < 3; i++) {
+    const ai = world.cycles[i + 1];
+    const el = hudEls.ai[i];
+    if (ai.alive) {
+      el.className = 'alive';
+      el.textContent = `AI-${i + 1} ●`;
+    } else {
+      el.className = 'dead';
+      el.textContent = `AI-${i + 1} ✕`;
+    }
+  }
+  // Power-up bar
+  if (world.player.powerupActive > 0) {
+    hudEls.powerBar.classList.add('show');
+    hudEls.powerLbl.classList.add('show');
+    hudEls.powerFill.style.width = (world.player.powerupActive / CONFIG.POWERUP_DURATION * 100) + '%';
+  } else if (world.player.powerupCooldown > 0) {
+    hudEls.powerBar.classList.add('show');
+    hudEls.powerLbl.classList.remove('show');
+    hudEls.powerFill.style.width = (1 - world.player.powerupCooldown / CONFIG.POWERUP_COOLDOWN) * 100 + '%';
+    hudEls.powerLbl.textContent = 'CHARGING…';
+  } else {
+    hudEls.powerBar.classList.add('show');
+    hudEls.powerFill.style.width = '100%';
+    hudEls.powerLbl.classList.add('show');
+    hudEls.powerLbl.textContent = 'SHIELD READY — SPACE';
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// MAIN LOOP
+// ───────────────────────────────────────────────────────────────────────────
+function tick() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (state === 'play') {
+    elapsed += dt;
+    const now = elapsed;
+    for (const c of world.cycles) {
+      c.update(dt, now, world);
+    }
+    checkCollisions(world);
+    // Prune trails every 0.25s
+    if (!tick._lastPrune || now - tick._lastPrune > 0.25) {
+      for (const c of world.cycles) {
+        const removed = c.trail.prune(now);
+        if (removed) c.trail.rebuild();
+      }
+      tick._lastPrune = now;
+    } else {
+      // Still rebuild if dirty
+      for (const c of world.cycles) {
+        if (c.trail._dirty) c.trail.rebuild();
+      }
+    }
+    for (const c of world.cycles) c.trail.syncAlpha(now);
+
+    // End conditions: player dead → over; only one cycle left → victory
+    if (!world.player.alive) {
+      gameOver();
+    } else {
+      const aliveCount = world.cycles.filter(c => c.alive).length;
+      if (aliveCount <= 1) gameOver();
+    }
+    updateCamera(dt);
+    if (audio.started) audio.setEngine(world.player.alive ? 1 : 0, world.player.speed);
+    updateHUD();
+  } else if (state === 'paused' || state === 'over') {
+    // Keep particles animating even when paused? No — freeze time.
+  }
+
+  particles.update(state === 'play' ? dt : 0);
+  composer.render();
+
+  // Clear edge-trigger flags
+  input.leftJustPressed = false;
+  input.rightJustPressed = false;
+  input.spaceJustPressed = false;
+
+  requestAnimationFrame(tick);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// INIT
+// ───────────────────────────────────────────────────────────────────────────
+function init() {
+  // Render one frame with the floor only for a clean start screen backdrop
+  composer.render();
+}
+init();
+tick();
+
+// ───────────────────────────────────────────────────────────────────────────
+// Expose for debugging (no-op for end users)
+// ───────────────────────────────────────────────────────────────────────────
+window.__tron = { world: () => world, CONFIG, COLORS };
+</script>
+</body>
+</html>
