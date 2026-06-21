@@ -997,27 +997,32 @@ class Cycle {
     this.aiTargetHeading = h;
   }
 
+  // Snap heading by a discrete angle (Tron-style grid turn).
+  // CONFIG.TURN_SNAP is currently 90° (PI/2).
+  snapTurn(dir) {
+    this.setHeading(this.heading + dir * CONFIG.TURN_SNAP);
+    if (this.mesh) this.mesh.rotation.y = -this.heading;
+    if (typeof audio !== 'undefined' && audio && audio.whoosh) audio.whoosh();
+  }
+
   update(dt, now, world) {
     if (!this.alive) return;
 
     // ── Player input handling ────────────────────────────────────────────
     if (this.isPlayer) {
-      // Continuous turning while holding
-      if (input.left)  this.turnInput = +1;
-      else if (input.right) this.turnInput = -1;
-      else {
-        // Release → consume buffer once for a 90° snap (optional flavor)
-        if (this.turnInput !== 0 && this.queuedTurn !== 0) {
-          this.setHeading(this.heading + this.queuedTurn * CONFIG.TURN_SNAP);
-          this.queuedTurn = 0;
-          audio.whoosh();
-        }
+      // ── Turn model (Option B): instant 60° snap on press, then smooth
+      //    continuous turn while held. Drop the old "queued-snap-on-release"
+      //    logic — that's what made quick taps feel jarring while held
+      //    presses felt smooth.
+      if (input.left) {
+        if (input.leftJustPressed) this.snapTurn(+1);   // instant 60°
+        this.turnInput = +1;                            // continue smoothly
+      } else if (input.right) {
+        if (input.rightJustPressed) this.snapTurn(-1);
+        this.turnInput = -1;
+      } else {
         this.turnInput = 0;
       }
-      // Buffered turns (alternate taps)
-      if (input.leftJustPressed && !input.right)  this.queuedTurn = +1;
-      if (input.rightJustPressed && !input.left)  this.queuedTurn = -1;
-
       this.heading += this.turnInput * CONFIG.TURN_RATE * dt;
 
       // Throttle
