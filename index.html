@@ -40,6 +40,11 @@
   #hud-top .label { color: var(--dim); text-shadow: none; }
   #hud-top .val   { color: var(--cyan); font-weight: 700; }
   #hud-top .sep   { color: var(--dim); margin: 0 6px; }
+  #hud-top #speed { transition: color .12s linear, text-shadow .12s linear; }
+  #hud-top #speed.boosting {
+    color: #fff7a0;
+    text-shadow: 0 0 10px #fff7a0, 0 0 24px rgba(255, 224, 120, 0.9);
+  }
 
   #hud-topright {
     top: 14px; right: 14px;
@@ -50,6 +55,37 @@
   }
   #hud-topright .alive { color: #d0ffe5; }
   #hud-topright .dead  { color: #ff5572; text-decoration: line-through; opacity: .55; }
+
+  /* ---------- Mini-map (radar) ---------- */
+  /* Sits in the top-right, just below the AI roster. pointer-events:none so it
+     never swallows clicks; sits under the touch controls (z-index 1 vs 50). */
+  #minimap {
+    position: fixed;
+    top: 86px;            /* clears the 3-line AI roster (~14 + 3*1.45*12 ≈ 66px) + a bit of margin */
+    right: 14px;
+    width: 120px;
+    height: 120px;
+    z-index: 1;           /* under touch-controls (50) and overlays (10), above the canvas */
+    pointer-events: none;
+    background: rgba(6, 12, 18, 0.55);
+    border: 1px solid rgba(0, 255, 255, 0.35);
+    border-radius: 4px;
+    box-shadow: 0 0 12px rgba(0, 255, 255, 0.15), inset 0 0 8px rgba(0, 0, 0, 0.6);
+  }
+  #minimap canvas {
+    display: block;
+    width: 120px;
+    height: 120px;
+  }
+  #minimap-label {
+    position: absolute;
+    top: -14px;
+    right: 0;
+    font-size: 9px;
+    letter-spacing: 1.5px;
+    color: var(--dim);
+    text-shadow: none;
+  }
 
   #hud-bottom {
     bottom: 14px; left: 50%;
@@ -314,6 +350,8 @@
     /* tighten HUD a bit on phones */
     #hud-top { font-size: 12px; padding: 6px 10px; }
     #hud-topright { font-size: 11px; padding: 6px 10px; }
+    /* hide the mini-map on phones — the layout is already cramped */
+    #minimap { display: none; }
   }
 
   /* Landscape phones — give the pad a touch more room */
@@ -343,6 +381,12 @@
   <div><span class="alive" id="ai1">AI-1 ●</span></div>
   <div><span class="alive" id="ai2">AI-2 ●</span></div>
   <div><span class="alive" id="ai3">AI-3 ●</span></div>
+</div>
+
+<!-- Mini-map (radar). Below the AI roster; hidden on mobile via CSS. -->
+<div id="minimap" aria-hidden="true">
+  <span id="minimap-label">RADAR</span>
+  <canvas id="minimap-canvas" width="120" height="120"></canvas>
 </div>
 
 <div id="hud-bottom" class="hud">
@@ -443,6 +487,11 @@ const CONFIG = {
   AI_COUNT:     3,
   POWERUP_DURATION: 4.0,
   POWERUP_COOLDOWN: 12.0,
+  SHIELD_BREAK_DURATION: 0.4,   // seconds for the shield-break shockwave
+  SHIELD_BREAK_R_MAX:   6.0,    // final ring radius
+  SHIELD_BREAK_R_START: 0.5,    // initial ring radius
+  SHIELD_BREAK_A_START: 0.8,    // initial alpha
+  SHIELD_BREAK_Y:       0.05,   // sit just above floor to avoid z-fighting
   BLOOM_STRENGTH: 1.05,
   BLOOM_RADIUS:   0.65,
   BLOOM_THRESHOLD: 0.05,
@@ -661,14 +710,28 @@ function buildCycleMesh(color) {
 // ───────────────────────────────────────────────────────────────────────────
 // TRAILS — fading ribbon segments
 // ───────────────────────────────────────────────────────────────────────────
+// Color target that an old trail segment fades toward. Dim cool gray, sits
+// roughly in the middle of the additive bloom range so it reads as a "ghost"
+// of the original line without going pure black (which AdditiveBlending
+// would erase entirely). Kept as module-scope to avoid per-segment allocs.
+const TRAIL_AGED_COLOR = { r: 0.30, g: 0.30, b: 0.34 }; // ~#4D4D57
+
 class Trail {
   constructor(color, owner) {
     this.color = color;
     this.owner = owner; // cycle reference (for immunity ignore)
     this.segments = []; // {x1,z1,x2,z2, born}
+    // Cache the cycle color as plain RGB numbers so syncColors() never has
+    // to touch a THREE.Color instance per vertex.
+    this._baseR = color.r;
+    this._baseG = color.g;
+    this._baseB = color.b;
     this.geometry = new THREE.BufferGeometry();
+    // White base + vertexColors=true: actual per-vertex colors are driven by
+    // the 'color' attribute we rebuild every frame in syncColors().
     this.material = new THREE.LineBasicMaterial({
-      color: color,
+      color: 0xffffff,
+      vertexColors: true,
       transparent: true,
       opacity: 1.0,
       linewidth: 1,
@@ -678,10 +741,12 @@ class Trail {
     this.mesh = new THREE.LineSegments(this.geometry, this.material);
     this.mesh.frustumCulled = false;
 
-    // Secondary glow underlay (thicker, semi-transparent)
+    // Secondary glow underlay (thicker, semi-transparent). Same trick —
+    // white base, vertexColors drives the hue.
     this.glowGeometry = new THREE.BufferGeometry();
     this.glowMaterial = new THREE.LineBasicMaterial({
-      color: color,
+      color: 0xffffff,
+      vertexColors: true,
       transparent: true,
       opacity: 0.4,
       blending: THREE.AdditiveBlending,
@@ -694,6 +759,9 @@ class Trail {
     scene.add(this.glowMesh);
 
     this._posBuffer = null;
+    this._colorBuffer = null; // reused Float32Array, in-place mutated per frame
+    this._colorAttr = null;
+    this._glowColorAttr = null;
     this._dirty = false;
   }
 
@@ -716,11 +784,20 @@ class Trail {
   }
 
   rebuild() {
-    // Two passes: main line + a slight outward offset "glow" line for thickness illusion
+    // Two passes: main line + a slight outward offset "glow" line for thickness illusion.
+    // We also allocate a single persistent Float32Array for per-vertex colors and
+    // mutate it in-place each frame from syncColors() — no per-frame allocation.
     const N = this.segments.length;
-    const basePts = new Float32Array(Math.max(2, N) * 2 * 3);
-    const glowPts = new Float32Array(Math.max(2, N) * 2 * 3);
-    const colArr = new Float32Array(Math.max(2, N) * 2 * 3);
+    const vertCount = Math.max(2, N) * 2;       // 2 verts per segment
+    const floatCount = vertCount * 3;
+    const basePts = new Float32Array(floatCount);
+    const glowPts = new Float32Array(floatCount);
+    // Allocate (or grow) the shared color buffer once. syncColors() will
+    // overwrite just the prefix we actually use each frame.
+    if (!this._colorBuffer || this._colorBuffer.length !== floatCount) {
+      this._colorBuffer = new Float32Array(floatCount);
+    }
+    const colArr = this._colorBuffer;
     let writeIdx = 0;
     for (let i = 0; i < N; i++) {
       const s = this.segments[i];
@@ -743,10 +820,65 @@ class Trail {
       glowPts[writeIdx * 3 + 5] = s.z2 + nz * OFF;
       writeIdx += 2;
     }
-    this.geometry.setAttribute('position', new THREE.BufferAttribute(basePts.subarray(0, writeIdx * 3), 3));
-    this.glowGeometry.setAttribute('position', new THREE.BufferAttribute(glowPts.subarray(0, writeIdx * 3), 3));
+    const usedFloats = writeIdx * 3;
+    const posAttr = new THREE.BufferAttribute(basePts.subarray(0, usedFloats), 3);
+    posAttr.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('position', posAttr);
+    const glowPosAttr = new THREE.BufferAttribute(glowPts.subarray(0, usedFloats), 3);
+    glowPosAttr.setUsage(THREE.DynamicDrawUsage);
+    this.glowGeometry.setAttribute('position', glowPosAttr);
+
+    // Color attribute is shared between the main line and the glow (same per-vertex
+    // color curve — the material's opacity controls the brightness contribution).
+    this._colorAttr = new THREE.BufferAttribute(colArr.subarray(0, usedFloats), 3);
+    this._colorAttr.setUsage(THREE.DynamicDrawUsage);
+    this._glowColorAttr = new THREE.BufferAttribute(colArr.subarray(0, usedFloats), 3);
+    this._glowColorAttr.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('color', this._colorAttr);
+    this.glowGeometry.setAttribute('color', this._glowColorAttr);
+
     this.geometry.computeBoundingSphere();
     this.glowGeometry.computeBoundingSphere();
+  }
+
+  /**
+   * Per-frame: rewrite the shared color buffer in-place. Each segment's two
+   * vertices get their RGB lerped from the cycle's color (age 0) toward
+   * TRAIL_AGED_COLOR (age >= TRAIL_LIFE). Mutates _colorBuffer directly and
+   * flags the attributes as needsUpdate — no allocations.
+   *
+   * Must be called every frame after rebuild() has been invoked at least once.
+   * Age factor: clamp(age / TRAIL_LIFE, 0, 1). At age 0 we are fully saturated;
+   * at age >= TRAIL_LIFE we are fully washed-out gray.
+   */
+  syncColors(now) {
+    const attr = this._colorAttr;
+    const glowAttr = this._glowColorAttr;
+    if (!attr || !this._colorBuffer) return;
+    const buf = this._colorBuffer;
+    const baseR = this._baseR, baseG = this._baseG, baseB = this._baseB;
+    const tR = TRAIL_AGED_COLOR.r, tG = TRAIL_AGED_COLOR.g, tB = TRAIL_AGED_COLOR.b;
+    const life = CONFIG.TRAIL_LIFE;
+    const segs = this.segments;
+    let writeIdx = 0;
+    for (let i = 0, n = segs.length; i < n; i++) {
+      const s = segs[i];
+      let age = (now - s.born) / life;
+      if (age < 0) age = 0; else if (age > 1) age = 1;
+      const inv = 1 - age;
+      // Lerp base -> aged gray
+      const r = baseR * inv + tR * age;
+      const g = baseG * inv + tG * age;
+      const b = baseB * inv + tB * age;
+      // Both endpoints of the segment share the same color.
+      const o = writeIdx * 3;
+      buf[o    ] = r; buf[o + 1] = g; buf[o + 2] = b;
+      buf[o + 3] = r; buf[o + 4] = g; buf[o + 5] = b;
+      writeIdx += 2;
+    }
+    attr.needsUpdate = true;
+    // Glow reuses the same buffer slice, so just flag it too.
+    if (glowAttr) glowAttr.needsUpdate = true;
   }
 
   syncAlpha(now) {
@@ -933,12 +1065,25 @@ class Cycle {
 
     // Power-up timers
     if (this.powerupActive > 0) {
+      const prev = this.powerupActive;
       this.powerupActive = Math.max(0, this.powerupActive - dt);
       // Flash cycle body during shield
       const flash = Math.sin(now * 18) > 0;
       this.mesh.children[0].material.emissiveIntensity = flash ? 2.4 : 1.2;
+      // Shield-break FX: trigger exactly once on the >0 → 0 transition for the
+      // player. This catches both timer expiry and any code path that zeroes
+      // the shield mid-frame, since both go through this decrement.
+      if (this.isPlayer && prev > 0 && this.powerupActive === 0) {
+        shieldBreakFX.trigger(this.position.x, this.position.y);
+      }
     } else if (this.isPlayer) {
-      this.mesh.children[0].material.emissiveIntensity = 1.2;
+      // Boost pulse — sine wave on emissive intensity while throttle > 0
+      // (range 0.5..1.5). Otherwise the steady 1.2 baseline.
+      if (this.throttle > 0) {
+        this.mesh.children[0].material.emissiveIntensity = 1 + 0.5 * Math.sin(now * 8);
+      } else {
+        this.mesh.children[0].material.emissiveIntensity = 1.2;
+      }
     }
     if (this.powerupCooldown > 0) {
       this.powerupCooldown = Math.max(0, this.powerupCooldown - dt);
@@ -1132,6 +1277,226 @@ const particles = new ParticleSystem(900);
 Cycle.prototype._spawnParticles = function (x, z, color) {
   particles.spawn(x, z, color, 60);
 };
+
+// ───────────────────────────────────────────────────────────────────────────
+// BOOST TRAIL — small bright points that stream behind the player
+// when throttle > 0. Fixed-size pool, recycled each frame; no allocations.
+// ───────────────────────────────────────────────────────────────────────────
+class BoostTrailParticles {
+  constructor(maxParticles = 30) {
+    this.max = maxParticles;
+    // Buffer geometry with one position per particle (initially parked far
+    // below the arena) and per-vertex color so each particle can fade.
+    const positions = new Float32Array(maxParticles * 3);
+    const colors    = new Float32Array(maxParticles * 3);
+    for (let i = 0; i < maxParticles; i++) {
+      positions[i * 3 + 0] = 0;
+      positions[i * 3 + 1] = -1000;
+      positions[i * 3 + 2] = 0;
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('color',    new THREE.BufferAttribute(colors,    3));
+    const mat = new THREE.PointsMaterial({
+      size: 0.55,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: 1.0,
+      vertexColors: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    this.points = new THREE.Points(geom, mat);
+    this.points.frustumCulled = false;
+    scene.add(this.points);
+
+    this._posAttr  = geom.getAttribute('position');
+    this._colAttr  = geom.getAttribute('color');
+    this.particles = new Array(maxParticles);
+    for (let i = 0; i < maxParticles; i++) {
+      this.particles[i] = {
+        active: false,
+        x: 0, y: 0, z: 0,
+        vx: 0, vy: 0, vz: 0,
+        life: 0, maxLife: 0.2,
+        r: 1, g: 1, b: 1,
+      };
+    }
+    this._spawnAccumulator = 0; // carries fractional spawns between frames
+  }
+
+  /**
+   * Spawn particles at a rate of `ratePerSecond` while the throttle is held.
+   * Spawn position is just behind the cycle, with a tiny random spread.
+   */
+  emit(x, z, heading, speed, dt, ratePerSecond) {
+    this._spawnAccumulator += dt * ratePerSecond;
+    // dx/dz are the unit forward direction the cycle is moving
+    const fx = Math.cos(heading);
+    const fz = -Math.sin(heading);
+    while (this._spawnAccumulator >= 1) {
+      this._spawnAccumulator -= 1;
+      this._spawnAt(x, z, fx, fz, speed);
+    }
+  }
+
+  _spawnAt(x, z, fx, fz, speed) {
+    // Find a free slot in the pool (re-use existing, never allocate).
+    for (let i = 0; i < this.max; i++) {
+      const p = this.particles[i];
+      if (p.active) continue;
+      // Place a bit behind the cycle, with small lateral jitter.
+      const back = 1.0 + Math.random() * 0.6;
+      const side = (Math.random() - 0.5) * 0.6;
+      p.x = x - fx * back + (-fz) * side;
+      p.z = z - fz * back + ( fx) * side;
+      p.y = 0.35 + Math.random() * 0.35;
+      // Slight rearward drift so the trail settles behind the cycle
+      p.vx = -fx * (speed * 0.15) + (Math.random() - 0.5) * 1.5;
+      p.vy = 0.4 + Math.random() * 0.6;
+      p.vz = -fz * (speed * 0.15) + (Math.random() - 0.5) * 1.5;
+      p.maxLife = 0.2; // 200ms
+      p.life    = p.maxLife;
+      // Bright white-cyan to match the boost palette
+      p.r = 0.6; p.g = 1.0; p.b = 1.0;
+      p.active = true;
+      return;
+    }
+    // Pool exhausted — drop the spawn (12/s is well under 30/0.2s, so this
+    // should never happen in normal play).
+  }
+
+  update(dt) {
+    const posArr = this._posAttr.array;
+    const colArr = this._colAttr.array;
+    let any = false;
+    for (let i = 0; i < this.max; i++) {
+      const p = this.particles[i];
+      if (!p.active) {
+        // Park dead particles far below so they don't render visibly.
+        posArr[i * 3 + 0] = 0;
+        posArr[i * 3 + 1] = -1000;
+        posArr[i * 3 + 2] = 0;
+        colArr[i * 3 + 0] = 0;
+        colArr[i * 3 + 1] = 0;
+        colArr[i * 3 + 2] = 0;
+        continue;
+      }
+      any = true;
+      p.life -= dt;
+      if (p.life <= 0) { p.active = false; continue; }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.z += p.vz * dt;
+      p.vy -= 4.0 * dt; // gentle settle toward the ground
+      p.vx *= 0.92;
+      p.vz *= 0.92;
+      const k = p.life / p.maxLife; // 1 → 0 over lifetime
+      posArr[i * 3 + 0] = p.x;
+      posArr[i * 3 + 1] = p.y;
+      posArr[i * 3 + 2] = p.z;
+      // Fade both brightness and color toward zero (per-vertex alpha isn't
+      // supported by PointsMaterial, but additive blending makes a fade
+      // toward black look like an alpha fade).
+      colArr[i * 3 + 0] = p.r * k;
+      colArr[i * 3 + 1] = p.g * k;
+      colArr[i * 3 + 2] = p.b * k;
+    }
+    this._posAttr.needsUpdate = true;
+    this._colAttr.needsUpdate = true;
+    this.points.visible = any;
+  }
+
+  reset() {
+    for (let i = 0; i < this.max; i++) this.particles[i].active = false;
+    this._spawnAccumulator = 0;
+  }
+}
+
+const boostTrail = new BoostTrailParticles(30);
+
+// ───────────────────────────────────────────────────────────────────────────
+// SHIELD-BREAK SHOCKWAVE — single expanding cyan ring on shield expiry
+// ───────────────────────────────────────────────────────────────────────────
+// We keep one reusable mesh in memory; on trigger() we create it on demand at
+// the player's position, animate radius/alpha over CONFIG.SHIELD_BREAK_DURATION,
+// then dispose geometry+material and detach. This guarantees:
+//   - exactly one active instance at a time (a re-trigger while playing is a
+//     no-op; the existing wave finishes first)
+//   - no per-frame allocations, no list management
+//   - cleanup on game restart via clearWorld()
+class ShieldBreakFX {
+  constructor() {
+    this.mesh = null;        // THREE.Mesh
+    this.geom  = null;       // THREE.RingGeometry
+    this.mat   = null;       // THREE.MeshBasicMaterial
+    this.elapsed = 0;        // seconds since trigger
+    this.duration = CONFIG.SHIELD_BREAK_DURATION;
+    this.active = false;
+  }
+
+  trigger(x, z) {
+    // If a wave is already playing, ignore — single-instance constraint.
+    if (this.active) return;
+
+    // Thin ring on the floor plane: inner=1.0, outer=1.0+epsilon so we get a
+    // hairline annulus; we grow it via mesh.scale (cheap, no geometry rebuild).
+    this.geom = new THREE.RingGeometry(1.0, 1.15, 64, 1);
+    this.mat = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: CONFIG.SHIELD_BREAK_A_START,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.mesh = new THREE.Mesh(this.geom, this.mat);
+    // Lay flat on the floor (RingGeometry is in the XY plane → rotate -90° X)
+    this.mesh.rotation.x = -Math.PI / 2;
+    this.mesh.position.set(x, CONFIG.SHIELD_BREAK_Y, z);
+    const r0 = CONFIG.SHIELD_BREAK_R_START;
+    this.mesh.scale.set(r0, r0, r0);
+    this.mesh.frustumCulled = false;
+    scene.add(this.mesh);
+
+    this.elapsed = 0;
+    this.duration = CONFIG.SHIELD_BREAK_DURATION;
+    this.active = true;
+  }
+
+  update(dt) {
+    if (!this.active) return;
+    this.elapsed += dt;
+    const t = this.elapsed / this.duration;
+    if (t >= 1) {
+      this._dispose();
+      return;
+    }
+    // Ease-out radius (sqrt feels like a shockwave decelerating)
+    const eased = 1 - (1 - t) * (1 - t);
+    const r = CONFIG.SHIELD_BREAK_R_START
+            + (CONFIG.SHIELD_BREAK_R_MAX - CONFIG.SHIELD_BREAK_R_START) * eased;
+    this.mesh.scale.set(r, r, r);
+    // Linear alpha fade 0.8 → 0
+    this.mat.opacity = CONFIG.SHIELD_BREAK_A_START * (1 - t);
+  }
+
+  _dispose() {
+    if (this.mesh) {
+      scene.remove(this.mesh);
+      this.mesh = null;
+    }
+    if (this.geom) { this.geom.dispose(); this.geom = null; }
+    if (this.mat)  { this.mat.dispose();  this.mat  = null; }
+    this.active = false;
+    this.elapsed = 0;
+  }
+
+  // Called on game restart to drop any in-flight wave immediately.
+  reset() { this._dispose(); }
+}
+
+const shieldBreakFX = new ShieldBreakFX();
 
 // ───────────────────────────────────────────────────────────────────────────
 // COLLISION
@@ -1413,6 +1778,8 @@ function clearWorld() {
   }
   world = null;
   particles.particles.forEach(p => p.active = false);
+  boostTrail.reset();
+  shieldBreakFX.reset();
 }
 
 function startGame() {
@@ -1511,6 +1878,9 @@ const hudEls = {
   powerFill: document.getElementById('powerup-fill'),
   powerBar:  document.getElementById('powerup-bar'),
   powerLbl:  document.getElementById('powerup-label'),
+  // Mini-map (radar) — populated on init so drawMinimap() can early-out if absent
+  minimap:    document.getElementById('minimap-canvas'),
+  minimapCtx: null,
 };
 function updateHUD() {
   if (!world) return;
@@ -1518,6 +1888,12 @@ function updateHUD() {
   hudEls.high.textContent  = Number(localStorage.getItem('tron3d.high') || 0);
   hudEls.time.textContent  = (elapsed - playerStartTime).toFixed(1);
   hudEls.speed.textContent = (world.player.speed / CONFIG.BASE_SPEED).toFixed(2);
+  // Boost indicator on the speed value (cyan → bright white-yellow)
+  if (world.player.throttle > 0) {
+    hudEls.speed.classList.add('boosting');
+  } else {
+    hudEls.speed.classList.remove('boosting');
+  }
   for (let i = 0; i < 3; i++) {
     const ai = world.cycles[i + 1];
     const el = hudEls.ai[i];
@@ -1548,6 +1924,160 @@ function updateHUD() {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// MINI-MAP (radar)
+// ───────────────────────────────────────────────────────────────────────────
+// World coords run from -CONFIG.ARENA .. +CONFIG.ARENA on both axes (CONFIG.ARENA = 100).
+// Canvas is 120x120. We scale by MAP_SCALE and offset by MAP_HALF to map world → px.
+const MAP_SIZE   = 120;             // canvas width/height in CSS px (also bitmap dims)
+const MAP_HALF   = MAP_SIZE / 2;
+const MAP_SCALE  = MAP_HALF / CONFIG.ARENA;   // 100 world units → 60 px
+
+// Convert a world position (px, pz) on the XZ plane to canvas (x, y).
+// World +X maps to canvas +X (right). World +Z maps to canvas +Y (down).
+function w2cX(px) { return MAP_HALF + px * MAP_SCALE; }
+function w2cY(pz) { return MAP_HALF + pz * MAP_SCALE; }
+
+// Tiny helper: turn a THREE.Color into a "rgb(r,g,b)" string. THREE's getStyle()
+// already returns that, but we cache the per-cycle color string at boot to avoid
+// the call cost every frame.
+function _colorToCss(c) {
+  return '#' + c.getHexString();
+}
+
+// Precompute cycle colors once. Index 0 is the player, 1..3 are AIs.
+const _minimapColors = [
+  _colorToCss(COLORS.player),   // player (cyan)
+  _colorToCss(COLORS.ai[0]),    // magenta
+  _colorToCss(COLORS.ai[1]),    // orange
+  _colorToCss(COLORS.ai[2]),    // red
+];
+
+function drawMinimap() {
+  const cv = hudEls.minimap;
+  if (!cv) return;                 // element missing — bail silently
+  let ctx = hudEls.minimapCtx;
+  if (!ctx) {
+    ctx = cv.getContext('2d');
+    if (!ctx) return;
+    hudEls.minimapCtx = ctx;
+  }
+  if (!world || !world.cycles) return;
+
+  const now = elapsed;
+  const W = MAP_SIZE, H = MAP_SIZE;
+
+  // Clear (semi-opaque fill gives a slight motion-trail feel without state)
+  ctx.clearRect(0, 0, W, H);
+
+  // ── Arena outline ────────────────────────────────────────────────────────
+  // The arena is a square from -ARENA..+ARENA on both axes.
+  ctx.strokeStyle = 'rgba(120, 170, 200, 0.55)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(1.5, 1.5, W - 3, H - 3);
+
+  // Subtle crosshair for spatial reference
+  ctx.strokeStyle = 'rgba(80, 120, 150, 0.25)';
+  ctx.beginPath();
+  ctx.moveTo(MAP_HALF, 0); ctx.lineTo(MAP_HALF, H);
+  ctx.moveTo(0, MAP_HALF); ctx.lineTo(W, MAP_HALF);
+  ctx.stroke();
+
+  // ── Trails (one polyline per cycle, segments shaded by age) ──────────────
+  // Drawn before cycle dots so the dots overlay the trails.
+  const trailLife = CONFIG.TRAIL_LIFE;
+  for (let i = 0; i < world.cycles.length; i++) {
+    const c = world.cycles[i];
+    if (!c.trail || c.trail.segments.length === 0) continue;
+    const baseColor = _minimapColors[i] || _minimapColors[0];
+    const segs = c.trail.segments;
+    for (let s = 0; s < segs.length; s++) {
+      const seg = segs[s];
+      const age = now - seg.born;
+      if (age < 0) continue;                  // shouldn't happen, but be safe
+      // 1.0 when fresh, 0.0 at trail expiry — used for color fade toward gray.
+      const t = Math.max(0, 1 - age / trailLife);
+      // Mix the cycle color toward a neutral gray as it ages.
+      // gray = (140,140,140); fresh = baseColor
+      const r = Math.round(140 + (parseInt(baseColor.slice(1, 3), 16) - 140) * t);
+      const g = Math.round(140 + (parseInt(baseColor.slice(3, 5), 16) - 140) * t);
+      const b = Math.round(140 + (parseInt(baseColor.slice(5, 7), 16) - 140) * t);
+      ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${0.25 + 0.65 * t})`;
+      ctx.lineWidth = 1 + 0.5 * t;
+      ctx.beginPath();
+      ctx.moveTo(w2cX(seg.x1), w2cY(seg.z1));
+      ctx.lineTo(w2cX(seg.x2), w2cY(seg.z2));
+      ctx.stroke();
+    }
+  }
+
+  // ── Cycles ────────────────────────────────────────────────────────────────
+  // AI first (so the player dot draws on top of anyone overlapping).
+  for (let i = 0; i < world.cycles.length; i++) {
+    const c = world.cycles[i];
+    if (c.isPlayer) continue;
+    const col = _minimapColors[i] || _minimapColors[0];
+    const x = w2cX(c.position.x);
+    const y = w2cY(c.position.y);
+    if (c.alive) {
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      // small direction tick
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      const dx = Math.cos(c.heading) * 5;
+      // canvas +Y is down; world heading rotates in the XZ plane so use sin for Y
+      const dy = -Math.sin(c.heading) * 5;
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + dx, y + dy);
+      ctx.stroke();
+    } else {
+      // Dead → dim hollow ring at last position
+      ctx.strokeStyle = 'rgba(255, 85, 114, 0.7)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  // Player — bigger, filled, with a clearer heading wedge.
+  const p = world.player;
+  if (p) {
+    const col = _minimapColors[0];
+    const x = w2cX(p.position.x);
+    const y = w2cY(p.position.y);
+    if (p.alive) {
+      // Heading wedge (triangle) — points along heading
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      const hx = Math.cos(p.heading);
+      const hy = -Math.sin(p.heading);
+      const px2 = -hy, py2 = hx;   // perpendicular for the base
+      const tipR = 7, baseR = 4;
+      ctx.moveTo(x + hx * tipR, y + hy * tipR);
+      ctx.lineTo(x + px2 * baseR, y + py2 * baseR);
+      ctx.lineTo(x - px2 * baseR, y - py2 * baseR);
+      ctx.closePath();
+      ctx.fill();
+      // Filled dot at center
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(x, y, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.strokeStyle = 'rgba(255, 85, 114, 0.85)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // MAIN LOOP
 // ───────────────────────────────────────────────────────────────────────────
 function tick() {
@@ -1572,7 +2102,10 @@ function tick() {
         if (c.trail._dirty) c.trail.rebuild();
       }
     }
-    for (const c of world.cycles) c.trail.syncAlpha(now);
+    for (const c of world.cycles) {
+      c.trail.syncAlpha(now);
+      c.trail.syncColors(now);
+    }
 
     // End conditions: player dead → over; only one cycle left → victory
     if (!world.player.alive) {
@@ -1584,12 +2117,34 @@ function tick() {
     updateCamera(dt);
     if (audio.started) audio.setEngine(world.player.alive ? 1 : 0, world.player.speed);
     updateHUD();
+
+    // Boost-trail particles — only the PLAYER cycle, only when actually
+    // boosting (throttle > 0), spawned at 12/s behind the cycle.
+    if (world.player.alive && world.player.throttle > 0) {
+      boostTrail.emit(
+        world.player.position.x,
+        world.player.position.y, // (x, z) stored as Vector2(x, z)
+        world.player.heading,
+        world.player.speed,
+        dt,
+        12
+      );
+    } else {
+      // Decay the spawn accumulator so we don't burst on a quick tap→release
+      boostTrail._spawnAccumulator = 0;
+    }
   } else if (state === 'paused' || state === 'over') {
     // Keep particles animating even when paused? No — freeze time.
   }
 
   particles.update(state === 'play' ? dt : 0);
+  boostTrail.update(state === 'play' ? dt : 0);
+  shieldBreakFX.update(dt);
   composer.render();
+
+  // Mini-map: redraw every frame regardless of state so the radar still
+  // shows the final layout on the game-over screen.
+  if (hudEls.minimap) drawMinimap();
 
   // Clear edge-trigger flags
   input.leftJustPressed = false;
