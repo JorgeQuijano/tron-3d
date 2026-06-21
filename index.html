@@ -589,14 +589,10 @@ class Trail {
   }
 
   addSegment(x1, z1, x2, z2, now) {
-    // Merge with previous segment if it shares an endpoint (continuity)
-    const last = this.segments[this.segments.length - 1];
-    let nx1 = x1, nz1 = z1, nx2 = x2, nz2 = z2;
-    if (last && Math.abs(last.x2 - nx1) < 1e-3 && Math.abs(last.z2 - nz1) < 1e-3) {
-      last.x2 = nx2; last.z2 = nz2;
-    } else {
-      this.segments.push({ x1: nx1, z1: nz1, x2: nx2, z2: nz2, born: now });
-    }
+    // Push a new segment every frame. The original code merged adjacent
+    // segments into one mega-segment from spawn to current position, which
+    // broke self-collision (cycle always at d=0 from its own trail).
+    this.segments.push({ x1, z1, x2, z2, born: now });
     this._dirty = true;
   }
 
@@ -658,17 +654,18 @@ class Trail {
 
   /**
    * Distance from point (x,z) to any segment (in xz plane).
-   * @param ignoreYoungerThanMs skip segments younger than this many ms
-   *        (prevents self-collision with the cycle's own fresh trail head).
-   *        Pass Number.POSITIVE_INFINITY (default) to check all segments.
+   * @param {number} now current game time in seconds (the time used to stamp
+   *        segment.born in Cycle.update). Pass Number.POSITIVE_INFINITY to
+   *        disable the age filter.
+   * @param {number} ignoreYoungerThanSec skip segments younger than this many
+   *        seconds.
    */
-  distanceToPoint(x, z, ignoreYoungerThanMs = Number.POSITIVE_INFINITY) {
+  distanceToPoint(x, z, now = Number.POSITIVE_INFINITY, ignoreYoungerThanSec = 0) {
     const segs = this.segments;
-    const now = performance.now();
     let min = Infinity;
     for (let i = 0; i < segs.length; i++) {
       const s = segs[i];
-      if (now - s.born < ignoreYoungerThanMs) continue;
+      if (ignoreYoungerThanSec > 0 && now - s.born < ignoreYoungerThanSec) continue;
       const d = pointToSegmentDist(x, z, s.x1, s.z1, s.x2, s.z2);
       if (d < min) min = d;
       if (min < 0.5) return min; // early-out
@@ -1030,7 +1027,7 @@ Cycle.prototype._spawnParticles = function (x, z, color) {
 // ───────────────────────────────────────────────────────────────────────────
 // COLLISION
 // ───────────────────────────────────────────────────────────────────────────
-function checkCollisions(world) {
+function checkCollisions(world, now) {
   for (const c of world.cycles) {
     if (!c.alive) continue;
     const px = c.position.x, pz = c.position.y;
@@ -1043,13 +1040,13 @@ function checkCollisions(world) {
     let hit = false;
     for (const other of world.cycles) {
       if (!other.alive && other.trail.segmentCount() === 0) continue;
-      // Player shield: ignore own trail entirely while active (still vulnerable to AI trails)
-      if (c.isPlayer && c.powerupActive > 0 && other === c) continue;
-      // Skip own trail segments younger than ~150ms — the trail head sits exactly
-      // under the cycle and we don't want instant self-death. Older segments
-      // still kill normally (you DO die if you run into your own past trail).
-      const ignoreMs = (other === c) ? 150 : 0;
-      const d = other.trail.distanceToPoint(px, pz, ignoreMs);
+      // Self-collision: a cycle is ALWAYS on top of its own trail (the current
+      // position is the endpoint of the youngest segment, and may coincide
+      // with older segments after a U-turn). We skip own trail entirely.
+      // Shield power-up lets the player also pass through AI trails.
+      if (other === c) continue;
+      if (c.isPlayer && c.powerupActive > 0) continue;
+      const d = other.trail.distanceToPoint(px, pz, now, 0);
       if (d < 0.55) { hit = true; break; }
     }
     if (hit) c.die(px, pz, world);
@@ -1401,7 +1398,7 @@ function tick() {
     for (const c of world.cycles) {
       c.update(dt, now, world);
     }
-    checkCollisions(world);
+    checkCollisions(world, now);
     // Prune trails every 0.25s
     if (!tick._lastPrune || now - tick._lastPrune > 0.25) {
       for (const c of world.cycles) {
@@ -1455,7 +1452,7 @@ tick();
 // ───────────────────────────────────────────────────────────────────────────
 // Expose for debugging (no-op for end users)
 // ───────────────────────────────────────────────────────────────────────────
-window.__tron = { world: () => world, CONFIG, COLORS };
+window.__tron = { world: () => world, getCycles: () => world.cycles, CONFIG, COLORS };
 </script>
 </body>
 </html>
