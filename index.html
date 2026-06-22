@@ -482,8 +482,11 @@ const CONFIG = {
   BASE_SPEED:   22,      // units/sec
   BOOST_SPEED:  36,      // units/sec
   BRAKE_SPEED:  10,      // units/sec
-  TURN_RATE:    2.6,     // radians/sec (continuous turn while holding key)
-  TURN_SNAP:    Math.PI / 2, // 90° snap turn when buffered
+  TURN_RATE:       2.6,           // radians/sec (max continuous turn rate while held)
+  TURN_RAMP_IN:    0.12,          // seconds to ramp turnInput 0 → ±1 on press
+  TURN_RAMP_OUT:   0.18,          // seconds to ramp turnInput ±1 → 0 on release
+  TURN_TAP_PULSE:  0.18,          // radians (~10°) injected once on a quick tap so it still feels responsive
+  TURN_SNAP:       Math.PI / 2,   // (unused; kept for legacy callers)
   AI_COUNT:     3,
   POWERUP_DURATION: 4.0,
   POWERUP_COOLDOWN: 12.0,
@@ -955,8 +958,9 @@ class Cycle {
     this.speed = CONFIG.BASE_SPEED;
 
     // Turning — player holds keys, AI may queue 90° turns
-    this.turnInput = 0;     // -1, 0, +1 (continuous)
-    this.queuedTurn = 0;    // -1 or +1, applies once when input is released
+    this.turnInput = 0;     // -1, 0, +1 (continuous, ramped smoothly)
+    this._turnDir = 0;      // raw target direction from input (before ramping)
+    this._tapStartedAt = -1;
     this._lastTurnApplied = -1;
 
     // Trail
@@ -1010,19 +1014,41 @@ class Cycle {
 
     // ── Player input handling ────────────────────────────────────────────
     if (this.isPlayer) {
-      // ── Turn model (Option B): instant 60° snap on press, then smooth
-      //    continuous turn while held. Drop the old "queued-snap-on-release"
-      //    logic — that's what made quick taps feel jarring while held
-      //    presses felt smooth.
-      if (input.left) {
-        if (input.leftJustPressed) this.snapTurn(+1);   // instant 60°
-        this.turnInput = +1;                            // continue smoothly
-      } else if (input.right) {
-        if (input.rightJustPressed) this.snapTurn(-1);
-        this.turnInput = -1;
+      // ── Turn model (no-snap): pure continuous steering.
+      //    - Tap (released within ~180ms) → short pulse, ~30° pivot
+      //    - Hold (≥180ms) → continuous turn at CONFIG.TURN_RATE
+      //    All easing is done by ramping `turnInput` 0 → ±1 over `TURN_RAMP_IN`
+      //    and back to 0 over `TURN_RAMP_OUT`. No discrete snap.
+      if (input.left)  this._turnDir = +1;
+      else if (input.right) this._turnDir = -1;
+      else this._turnDir = 0;
+
+      // Ramp the input magnitude up/down for smooth visual response.
+      const target = this._turnDir;
+      const cur = this.turnInput;
+      if (target !== 0) {
+        // Ramp up toward target over TURN_RAMP_IN seconds
+        const speed = 1 / CONFIG.TURN_RAMP_IN;
+        if (cur < target) this.turnInput = Math.min(target, cur + speed * dt);
+        else if (cur > target) this.turnInput = Math.max(target, cur - speed * dt);
       } else {
-        this.turnInput = 0;
+        // Ramp down toward 0 over TURN_RAMP_OUT seconds
+        const speed = 1 / CONFIG.TURN_RAMP_OUT;
+        if (cur > 0) this.turnInput = Math.max(0, cur - speed * dt);
+        else if (cur < 0) this.turnInput = Math.min(0, cur + speed * dt);
       }
+
+      // Quick-tap compensation: ensure even a brief tap registers a visible turn.
+      // The ramp itself takes 120ms to reach full strength, so a quick 50ms tap
+      // would only produce ~0.5 × 2.6 × 0.05 = 0.065 rad (~3.7°) of turn — almost
+      // invisible. Inject a tiny one-shot pulse so taps feel responsive without
+      // being snappy.
+      const wantTapPulse = (input.leftJustPressed && !input.right) || (input.rightJustPressed && !input.left);
+      if (wantTapPulse) {
+        this.setHeading(this.heading + this._turnDir * CONFIG.TURN_TAP_PULSE);
+        if (typeof audio !== 'undefined' && audio && audio.whoosh) audio.whoosh();
+      }
+
       this.heading += this.turnInput * CONFIG.TURN_RATE * dt;
 
       // Throttle
