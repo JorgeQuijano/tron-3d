@@ -131,6 +131,30 @@ Strategic implications:
 - Game over screen with stats and a **NEW HIGH SCORE** callout.
 - High score persisted to `localStorage`.
 
+### Level system
+
+The game now has a 5-level campaign plus an unlockable **Endless Mode**.
+
+| Level | Subtitle | AIs | AI speed | Arena |
+|------:|----------|----:|---------:|-------|
+| I     | OPEN GRID     | 1 | 0.85× | Empty square — tutorial |
+| II    | CENTER PILLAR | 2 | 0.95× | One large pillar in the middle |
+| III   | CORNER PYLONS | 2 | 1.05× | 4 pylons in each corner |
+| IV    | INNER WALLS   | 3 | 1.10× | Cross-shaped inner walls |
+| V     | GRID FRAGMENT | 3 | 1.20× | 5 fragmented blocks |
+
+Each level has a large intro banner with the level number + subtitle, and
+kill all AIs to advance. After clearing Level V, **Endless Mode unlocks**
+and a magenta ENDLESS button appears on the start screen.
+
+**Endless Mode**: random layout (re-rolled from the campaign levels)
+each wave, with AI count and speed scaling up. Waves start at 1 and
+go up. A wave counter replaces the LEVEL display in the HUD (`W1`, `W2`,
+…). High score from the last endless run is saved separately.
+
+Progress (campaign completion + endless high score) is persisted to
+`localStorage` so unlocking survives page reloads.
+
 ### Visual polish
 - Glowing trails rendered as `LineSegments` with a parallel offset
   "glow" line for thickness under bloom.
@@ -201,10 +225,40 @@ no `package.json`, no bundler.
 - **Audio**: Web Audio API, entirely procedural (no audio files).
   An `AudioContext` is created on the first user gesture (the
   ENGAGE click) to comply with browser autoplay policies.
-- **Persistence**: `localStorage` key `tron3d.high` for high score.
+  See [Music](#music) below for the synthwave engine.
+- **Persistence**: `localStorage` keys: `tron3d.high` (high score),
+  `tron3d.music` (music on/off), `tron3d.endlessUnlocked` (campaign
+  clear state).
 - **Touch + pointer events**: buttons listen to both so they work
   on every browser engine (Chrome / Safari / Firefox / Android
   WebView) and via headless-Chrome synthetic touches.
+
+---
+
+## Music
+
+A full procedural **synthwave soundtrack** runs alongside the SFX,
+all generated in Web Audio inside `index.html` (no audio files, no
+licensing concerns).
+
+- **130 BPM**, key of **A minor**, 4-bar loop
+- **Chord progression**: Am → F → C → G (the classic synthwave move)
+- **4 voice layers**, each a different synth:
+  1. **Pad** — detuned sawtooths through a slow lowpass
+  2. **Bass** — punchy sawtooth with filter envelope
+  3. **Arpeggio** — square wave eighth-note patterns
+  4. **Lead** — expressive sawtooth with portamento + filter sweep
+- **Intensity scales with progress**: starts sparse (pad only at
+  level 1), adds bass/arp/lead as you climb the levels and rack
+  up kills. Full 4-voice stack at level 4+ with several kills.
+- **Auto-ducking**: every `whoosh` / `crash` / `score` SFX briefly
+  drops the music gain so effects punch through.
+- **MUSIC checkbox** in the start overlay, persisted via
+  `localStorage` (`tron3d.music`).
+
+The result is a recognisable synthwave vibe — analog-style sawtooths,
+warm lowpass pads, pulsing bass, bright arpeggios — but fully
+synthesised rather than sampled.
 
 ---
 

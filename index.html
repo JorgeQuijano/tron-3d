@@ -246,6 +246,41 @@
     background: rgba(0,255,255,.08);
     box-shadow: 0 0 22px rgba(0,255,255,.45), inset 0 0 18px rgba(0,255,255,.15);
   }
+  .panel .start.secondary {
+    border-color: rgba(255, 43, 214, 0.7);
+    color: var(--magenta);
+    text-shadow: 0 0 8px var(--magenta);
+    box-shadow: 0 0 12px rgba(255, 43, 214, .25), inset 0 0 12px rgba(255, 43, 214, .08);
+    margin-left: 8px;
+  }
+  .panel .start.secondary:hover {
+    background: rgba(255, 43, 214, .08);
+    box-shadow: 0 0 22px rgba(255, 43, 214, .45), inset 0 0 18px rgba(255, 43, 214, .15);
+  }
+
+  /* Level intro banner — large centered text, fades in/out over 3s */
+  #level-banner {
+    position: fixed; left: 0; right: 0; top: 32%;
+    text-align: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity .35s;
+    z-index: 30;
+  }
+  #level-banner.show { opacity: 1; }
+  #level-banner .num {
+    font-size: 64px; letter-spacing: 14px;
+    color: var(--cyan); text-shadow: 0 0 18px var(--cyan), 0 0 32px rgba(0,255,255,.4);
+  }
+  #level-banner .sub {
+    margin-top: 8px;
+    font-size: 14px; letter-spacing: 6px; color: var(--dim);
+  }
+  #level-banner .sub .levelname { color: var(--cyan); margin-right: 10px; }
+
+  /* Level complete banner (shorter, gold tint) */
+  #level-banner.complete .num { color: #ffd966; text-shadow: 0 0 18px #ffd966, 0 0 32px rgba(255,217,102,.4); }
+  #level-banner.complete .sub .levelname { color: #ffd966; }
 
   .twist {
     color: #ffe27a;
@@ -375,12 +410,15 @@
   <div><span class="label">HIGH</span>  <span class="val" id="highscore">0</span></div>
   <div><span class="label">TIME</span>  <span class="val" id="time">0.0</span><span class="label">s</span></div>
   <div><span class="label">SPEED</span> <span class="val" id="speed">1.0</span><span class="label">x</span></div>
+  <div><span class="label">LEVEL</span> <span class="val" id="level-display">I</span></div>
 </div>
 
 <div id="hud-topright" class="hud">
   <div><span class="alive" id="ai1">AI-1 ●</span></div>
   <div><span class="alive" id="ai2">AI-2 ●</span></div>
   <div><span class="alive" id="ai3">AI-3 ●</span></div>
+  <div><span class="alive" id="ai4" style="display:none;">AI-4 ●</span></div>
+  <div><span class="alive" id="ai5" style="display:none;">AI-5 ●</span></div>
 </div>
 
 <!-- Mini-map (radar). Below the AI roster; hidden on mobile via CSS. -->
@@ -396,6 +434,12 @@
 <div id="powerup-label">SHIELD ACTIVE</div>
 <div id="powerup-bar"><div class="fill" id="powerup-fill"></div></div>
 
+<!-- Level intro / completion banner -->
+<div id="level-banner">
+  <div class="num" id="level-banner-num">I</div>
+  <div class="sub"><span class="levelname" id="level-banner-name">OPEN GRID</span> <span id="level-banner-detail">3 OPPONENTS</span></div>
+</div>
+
 <!-- Start overlay -->
 <div id="overlay-start" class="overlay">
   <div class="panel">
@@ -409,6 +453,7 @@
       The arena rewrites itself — bait enemies into their own freshly-laid walls.
     </p>
     <button class="start" id="btn-start">ENGAGE</button>
+    <button class="start secondary" id="btn-endless" style="display:none;">ENDLESS</button>
     <div class="hint">
       <kbd>A</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>→</kbd> turn &nbsp;
       <kbd>W</kbd> / <kbd>↑</kbd> boost &nbsp;
@@ -421,6 +466,9 @@
         <input type="checkbox" id="music-toggle" checked>
         &nbsp;MUSIC
       </label>
+    </div>
+    <div class="hint" style="margin-top: 8px; font-size: 11px;">
+      <span id="mode-hint">CAMPAIGN MODE — 5 LEVELS</span>
     </div>
   </div>
 </div>
@@ -505,6 +553,54 @@ const CONFIG = {
   BLOOM_RADIUS:   0.65,
   BLOOM_THRESHOLD: 0.05,
 };
+
+// ─── Level / progression system ────────────────────────────────────────────
+// Each campaign level has a number, name, subtitle, optional obstacles, AI count,
+// AI speed multiplier, and AI base turn rate. Obstacles are axis-aligned boxes
+// inside the arena (between the walls). Both walls and obstacles block cycles
+// and are used for collision + line-of-sight by the AI.
+const LEVELS = [
+  { name: 'I',   subtitle: 'OPEN GRID',     obstacles: [],
+    aiCount: 1, aiSpeedMul: 0.85, aiTurnRate: 1.8 },
+  { name: 'II',  subtitle: 'CENTER PILLAR', obstacles: [{x:0, z:0, w:14, d:14}],
+    aiCount: 2, aiSpeedMul: 0.95, aiTurnRate: 2.0 },
+  { name: 'III', subtitle: 'CORNER PYLONS', obstacles: [
+      {x:-55, z:-55, w:10, d:10}, {x: 55, z:-55, w:10, d:10},
+      {x:-55, z: 55, w:10, d:10}, {x: 55, z: 55, w:10, d:10}
+    ],
+    aiCount: 2, aiSpeedMul: 1.05, aiTurnRate: 2.2 },
+  { name: 'IV',  subtitle: 'INNER WALLS',   obstacles: [
+      {x:  0, z: 30, w:60, d: 4}, {x:  0, z:-30, w:60, d: 4},
+      {x: 30, z:  0, w: 4, d:30}, {x:-30, z:  0, w: 4, d:30}
+    ],
+    aiCount: 3, aiSpeedMul: 1.10, aiTurnRate: 2.4 },
+  { name: 'V',   subtitle: 'GRID FRAGMENT', obstacles: [
+      {x:-22, z:-22, w:24, d: 4}, {x: 22, z:-22, w: 4, d:24},
+      {x:-22, z: 22, w: 4, d:24}, {x: 22, z: 22, w:24, d: 4},
+      {x:  0, z:  0, w: 8, d: 8}
+    ],
+    aiCount: 3, aiSpeedMul: 1.20, aiTurnRate: 2.6 }
+];
+
+// Endless mode: random obstacle layout per wave, growing AI count + speed.
+function endlessConfig(wave) {
+  const aiCount = Math.min(1 + Math.floor(wave / 2), 5);
+  const speed   = Math.min(0.85 + wave * 0.05, 1.5);
+  const turn    = Math.min(1.8 + wave * 0.04, 2.8);
+  // Pick a random layout from the campaign levels (re-rolled each wave)
+  const template = LEVELS[Math.floor(Math.random() * LEVELS.length)];
+  return {
+    name: '∞',
+    subtitle: `WAVE ${wave}`,
+    obstacles: template.obstacles.map(o => ({...o})),
+    aiCount, aiSpeedMul: speed, aiTurnRate: turn
+  };
+}
+
+let endlessUnlocked = (() => { try { return localStorage.getItem('tron3d.endlessUnlocked') === '1'; } catch { return false; } })();
+let currentLevel   = 0;    // 0..4 for campaign; -1 for endless
+let endlessWave    = 0;
+let campaignDone   = false;
 
 const COLORS = {
   bg:       new THREE.Color(0x03060a),
@@ -661,6 +757,67 @@ function buildWalls() {
 
 const floorMesh = buildFloor();
 const walls = buildWalls();
+
+// ─── Obstacles (per-level, regenerated when the level changes) ──────────────
+// Each obstacle is {x, z, w, d} in world units (centered at (x, z), size w×d).
+// Drawn as a glowing box that sits slightly above the floor; cycles bounce off
+// them in the collision pass just like walls.
+let obstacles = [];   // active obstacle list (rects only — mesh is in obstacleGroup)
+const obstacleGroup = new THREE.Group();
+scene.add(obstacleGroup);
+
+function clearObstacles() {
+  while (obstacleGroup.children.length) {
+    const m = obstacleGroup.children.pop();
+    if (m.geometry) m.geometry.dispose();
+    if (m.material) m.material.dispose();
+  }
+  obstacles = [];
+}
+
+function buildObstacles(list) {
+  clearObstacles();
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xff6ad5, transparent: true, opacity: 0.5,
+  });
+  const edgeMat = new THREE.MeshBasicMaterial({ color: 0xffaee8 });
+  for (const o of list) {
+    const h = 1.4;
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(o.w, h, o.d), mat);
+    mesh.position.set(o.x, h / 2, o.z);
+    obstacleGroup.add(mesh);
+    // Bright top edge
+    const edge = new THREE.Mesh(
+      new THREE.BoxGeometry(o.w, 0.08, 0.08),
+      edgeMat
+    );
+    edge.position.set(o.x, h, o.z - o.d / 2);
+    obstacleGroup.add(edge);
+    const edge2 = edge.clone();
+    edge2.position.z = o.z + o.d / 2;
+    obstacleGroup.add(edge2);
+    const edge3 = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08, 0.08, o.d),
+      edgeMat
+    );
+    edge3.position.set(o.x - o.w / 2, h, o.z);
+    obstacleGroup.add(edge3);
+    const edge4 = edge3.clone();
+    edge4.position.x = o.x + o.w / 2;
+    obstacleGroup.add(edge4);
+    obstacles.push({ ...o });
+  }
+}
+
+// Returns true if a circle of radius `r` at (x, z) is inside any obstacle
+function pointInObstacle(x, z, r = 0.5) {
+  for (const o of obstacles) {
+    const dx = Math.abs(x - o.x);
+    const dz = Math.abs(z - o.z);
+    if (dx < o.w / 2 + r && dz < o.d / 2 + r) return true;
+  }
+  return false;
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // LIGHT CYCLE — visible body
@@ -961,7 +1118,7 @@ class Cycle {
 
     this.position = new THREE.Vector2(opts.x, opts.z); // (x, z) on XZ plane
     this.heading = opts.heading; // radians, 0 = +X, increasing CCW
-    this.speed = CONFIG.BASE_SPEED;
+    this.speed = CONFIG.BASE_SPEED * (opts.speedMul || 1);
 
     // Turning — player holds keys, AI may queue 90° turns
     this.turnInput = 0;     // -1, 0, +1 (continuous, ramped smoothly)
@@ -1145,6 +1302,8 @@ class Cycle {
     }
     // Wall ahead?
     if (Math.abs(tx) > CONFIG.ARENA - 4 || Math.abs(tz) > CONFIG.ARENA - 4) danger = true;
+    // Obstacle ahead?
+    if (pointInObstacle(tx, tz, 1.5)) danger = true;
 
     if (danger || this.aiNextDecisionAt < now) {
       // Decide: +90 or -90 — pick the side whose forward-lookahead is safer
@@ -1157,6 +1316,8 @@ class Cycle {
         // Reward distance from walls
         const wallMargin = CONFIG.ARENA - Math.max(Math.abs(lx), Math.abs(lz));
         s += Math.max(0, wallMargin);
+        // Penalize obstacles
+        if (pointInObstacle(lx, lz, 1.5)) s -= 200;
         // Reward open space (no nearby trails)
         for (const c of world.cycles) {
           if (!c.alive || c === this) continue;
@@ -1189,7 +1350,7 @@ class Cycle {
       world.player.eliminations += 1;
       world.player.score += 100;
       audio.score();
-      audio.setIntensity(world.player.eliminations);   // music builds with kills
+      if (typeof updateMusicIntensity === 'function') updateMusicIntensity();
     }
     // Flash screen if player died
     if (this.isPlayer) {
@@ -1548,6 +1709,11 @@ function checkCollisions(world, now) {
       c.die(px, pz, world);
       continue;
     }
+    // Obstacles (per-level)
+    if (pointInObstacle(px, pz, 0.5)) {
+      c.die(px, pz, world);
+      continue;
+    }
     // Trails
     let hit = false;
     for (const other of world.cycles) {
@@ -1875,7 +2041,8 @@ function stopMusic() {
 
 function setIntensity(level) {
   // Called when AI is killed — 1 = bass, 2 = +arp, 3 = +lead
-  musicIntensity = Math.max(musicIntensity, Math.max(0, Math.min(3, level)));
+  // (also called with larger values from updateMusicIntensity — see below)
+  musicIntensity = Math.max(musicIntensity, Math.max(0, Math.min(4, level)));
 }
 
 // Persist user preference for music on/off across sessions.
@@ -1918,6 +2085,27 @@ function score() {
   }
   return { init, startEngine, setEngine, stopEngine, crash, whoosh, powerup, score, startMusic, stopMusic, setIntensity, duck, setMusicEnabled };
 })();
+
+// Music intensity combines campaign-level baseline + per-kill additions so the
+// soundtrack feels like it's escalating through the campaign even before any
+// kills happen. Lives at module scope so startGame (also at module scope) and
+// cycle.die can both call it. The actual `musicIntensity` variable is owned by
+// the audio IIFE; we just go through `audio.setIntensity(n)`.
+function updateMusicIntensity() {
+  let base = 0;
+  if (gameMode === 'endless') {
+    // Endless: start at 0 and grow by 1 every 2 waves, capped at 3
+    base = Math.min(3, Math.floor((endlessWave - 1) / 2));
+  } else if (currentLevel >= 0) {
+    // Campaign: level 1=0, 2=1, 3=2, 4=3, 5=3
+    base = Math.min(3, currentLevel);
+  }
+  let bonus = 0;
+  if (world && world.player) {
+    bonus = Math.min(3, Math.floor(world.player.eliminations / 2));
+  }
+  audio.setIntensity(base + bonus);
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // INPUT
@@ -2008,8 +2196,27 @@ function bindKeys() {
   app.addEventListener('touchstart',    (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
 
   // Click on overlays (also fires for touch on mobile)
-  document.getElementById('btn-start').addEventListener('click', startGame);
-  document.getElementById('btn-restart').addEventListener('click', restart);
+  // ENGAGE → start campaign at level 1
+  // ENDLESS (only shown after first campaign clear) → start endless mode
+  // RE-ENGAGE → restart current level (campaign) or current wave (endless)
+  //            After VICTORY, RE-ENGAGE becomes "ENDLESS MODE" and starts wave 1
+  document.getElementById('btn-start').addEventListener('click', () => {
+    startGame('campaign', 0, 1);
+  });
+  const btnEndless = document.getElementById('btn-endless');
+  if (btnEndless) btnEndless.addEventListener('click', () => {
+    startGame('endless', 0, 1);
+  });
+  document.getElementById('btn-restart').addEventListener('click', () => {
+    // After VICTORY: RE-ENGAGE button has been relabeled to "ENDLESS MODE"
+    if (state === 'victory') {
+      startGame('endless', 0, 1);
+    } else {
+      restart();
+    }
+  });
+  // Reflect unlocked state in the start overlay
+  updateStartOverlayMode();
 
   // Music on/off toggle. Persists across sessions via localStorage.
   const musicToggle = document.getElementById('music-toggle');
@@ -2033,6 +2240,21 @@ let clock = new THREE.Clock();
 let elapsed = 0;
 let playerStartTime = 0;
 
+// Active level config — set by startGame() / nextLevel(). All spawns + AI
+// behavior pulls from this object.
+let levelCfg = LEVELS[0];
+
+// Spawn positions distributed around the arena. Spreads AIs to different
+// edges so they don't immediately crash into each other. Caller can pass
+// `count` to get a subset for low-AI levels (e.g. level 1 with 1 AI).
+const SPAWN_TEMPLATES = [
+  { x:  CONFIG.ARENA * 0.6,  z: -CONFIG.ARENA * 0.55, heading: Math.PI },          // magenta edge
+  { x: -CONFIG.ARENA * 0.05, z:  CONFIG.ARENA * 0.6,  heading: -Math.PI / 2 },     // orange top
+  { x:  CONFIG.ARENA * 0.55, z:  CONFIG.ARENA * 0.55, heading: -Math.PI * 0.75 },  // red corner
+  { x: -CONFIG.ARENA * 0.55, z: -CONFIG.ARENA * 0.55, heading:  Math.PI * 0.25 },  // 4th spawn (for endless)
+  { x:  CONFIG.ARENA * 0.0,  z:  CONFIG.ARENA * 0.6,  heading: -Math.PI / 2 },     // center top
+];
+
 function buildWorld() {
   const cycles = [];
   const player = new Cycle({
@@ -2042,19 +2264,16 @@ function buildWorld() {
   });
   cycles.push(player);
 
-  // Spawn AIs at corners, facing inward
-  const starts = [
-    { x:  CONFIG.ARENA * 0.6, z: -CONFIG.ARENA * 0.55, heading: Math.PI },          // magenta from right, facing left
-    { x: -CONFIG.ARENA * 0.05, z:  CONFIG.ARENA * 0.6,  heading: -Math.PI / 2 },     // orange from top, facing down
-    { x:  CONFIG.ARENA * 0.55, z:  CONFIG.ARENA * 0.55, heading: -Math.PI * 0.75 },  // red from top-right, facing diagonal
-  ];
-  for (let i = 0; i < CONFIG.AI_COUNT; i++) {
+  const n = Math.min(levelCfg.aiCount, SPAWN_TEMPLATES.length, COLORS.ai.length + 2);
+  for (let i = 0; i < n; i++) {
+    const tmpl = SPAWN_TEMPLATES[i];
     cycles.push(new Cycle({
       id: i + 1,
       name: 'AI-' + (i + 1),
-      color: COLORS.ai[i],
+      color: COLORS.ai[i % COLORS.ai.length],
       isAI: true,
-      x: starts[i].x, z: starts[i].z, heading: starts[i].heading,
+      speedMul: levelCfg.aiSpeedMul,
+      x: tmpl.x, z: tmpl.z, heading: tmpl.heading,
     }));
   }
   return { cycles, player };
@@ -2072,11 +2291,56 @@ function clearWorld() {
   shieldBreakFX.reset();
 }
 
-function startGame() {
+// Game mode. 'campaign' advances through LEVELS[0..4]; 'endless' loops
+// endlessConfig(wave) forever. Set by startGame(mode) when the user picks
+// from the start menu.
+let gameMode = 'campaign';
+
+function showLevelBanner(text, sub, opts = {}) {
+  const banner = document.getElementById('level-banner');
+  document.getElementById('level-banner-num').textContent = text;
+  document.getElementById('level-banner-name').textContent = sub.name || '';
+  document.getElementById('level-banner-detail').textContent = sub.detail || '';
+  banner.classList.toggle('complete', !!opts.complete);
+  banner.classList.add('show');
+  if (showLevelBanner._t) clearTimeout(showLevelBanner._t);
+  if (showLevelBanner._t2) clearTimeout(showLevelBanner._t2);
+  showLevelBanner._t = setTimeout(() => banner.classList.remove('show'), opts.hold || 1800);
+}
+
+// Show / hide the ENDLESS button on the start overlay depending on whether
+// the player has ever cleared the campaign. localStorage is the source of truth
+// (we set `tron3d.endlessUnlocked` on first campaign clear in showVictory).
+function updateStartOverlayMode() {
+  const btn = document.getElementById('btn-endless');
+  const hint = document.getElementById('mode-hint');
+  if (!btn) return;
+  if (endlessUnlocked) {
+    btn.style.display = 'inline-block';
+    if (hint) hint.textContent = 'CAMPAIGN — 5 LEVELS  ·  ENDLESS — UNLOCKED';
+  } else {
+    btn.style.display = 'none';
+    if (hint) hint.textContent = 'CAMPAIGN MODE — CLEAR ALL 5 LEVELS TO UNLOCK ENDLESS';
+  }
+}
+
+function startGame(mode = 'campaign', level = 0, wave = 1) {
   audio.init();
   audio.startEngine();
   audio.startMusic();
   audio.setIntensity(0);   // start sparse, builds with kills
+  // The actual baseline for this level will be set after world is built
+  // (updateMusicIntensity reads world.player.eliminations).
+  gameMode = mode;
+  if (mode === 'endless') {
+    levelCfg = endlessConfig(wave);
+    endlessWave = wave;
+    currentLevel = -1;
+  } else {
+    currentLevel = level;
+    levelCfg = LEVELS[level];
+  }
+  buildObstacles(levelCfg.obstacles);
   clearWorld();
   world = buildWorld();
   elapsed = 0;
@@ -2085,11 +2349,67 @@ function startGame() {
   document.getElementById('overlay-start').classList.add('hidden');
   document.getElementById('overlay-over').classList.add('hidden');
   document.getElementById('overlay-pause').classList.add('hidden');
+  // Brief level banner on game start
+  const num = mode === 'endless' ? '∞' : levelCfg.name;
+  const sub = { name: levelCfg.subtitle, detail: `${levelCfg.aiCount} OPPONENT${levelCfg.aiCount === 1 ? '' : 'S'}` };
+  showLevelBanner(num, sub, { hold: 1800 });
+  // Set music intensity baseline for this level (after world is built)
+  updateMusicIntensity();
   updateHUD();
 }
 
 function restart() {
-  startGame();
+  // Restart the current level/mode with fresh state. (R key / RE-ENGAGE button)
+  if (gameMode === 'endless') {
+    startGame('endless', 0, endlessWave);
+  } else {
+    // currentLevel is -1 only right at app start (before any game has been
+    // played). After that it's always 0..4. Default to 0 to be safe.
+    const lv = currentLevel >= 0 ? currentLevel : 0;
+    startGame('campaign', lv, 1);
+  }
+}
+
+function nextLevel() {
+  // Advance: campaign → next level, or campaign-complete → victory
+  if (gameMode === 'endless') {
+    startGame('endless', 0, endlessWave + 1);
+  } else if (currentLevel + 1 < LEVELS.length) {
+    startGame('campaign', currentLevel + 1, 1);
+  } else {
+    showVictory();
+  }
+}
+
+function showVictory() {
+  // Player cleared the campaign. Unlock Endless and show the victory overlay.
+  state = 'victory';
+  campaignDone = true;
+  endlessUnlocked = true;
+  try { localStorage.setItem('tron3d.endlessUnlocked', '1'); } catch {}
+  // Reuse the over-overlay with a victory title
+  const p = world.player;
+  const high = Number(localStorage.getItem('tron3d.high') || 0);
+  if (p.score > high) localStorage.setItem('tron3d.high', String(p.score));
+  document.getElementById('over-title').textContent = 'CAMPAIGN COMPLETE';
+  document.getElementById('over-score').textContent = p.score;
+  document.getElementById('over-kills').textContent = p.eliminations;
+  document.getElementById('over-time').textContent = (elapsed - playerStartTime).toFixed(1) + 's';
+  document.getElementById('over-high').textContent = Math.max(high, p.score);
+  document.getElementById('over-detail').textContent = '★ ENDLESS MODE UNLOCKED ★';
+  document.getElementById('btn-restart').textContent = 'ENDLESS MODE';
+  document.getElementById('overlay-over').classList.remove('hidden');
+  audio.stopEngine();
+  audio.stopMusic();
+}
+
+function showLevelComplete() {
+  // Brief "LEVEL COMPLETE" banner, then start the next level after a 1.6s pause.
+  state = 'levelcomplete';
+  showLevelBanner('✓', { name: 'LEVEL COMPLETE', detail: '' }, { hold: 1400, complete: true });
+  setTimeout(() => {
+    if (state === 'levelcomplete') nextLevel();
+  }, 1500);
 }
 
 function togglePause() {
@@ -2103,13 +2423,14 @@ function togglePause() {
 }
 
 function gameOver() {
+  if (state !== 'play') return;   // avoid double-fire (e.g. levelcomplete transition)
   state = 'over';
   const p = world.player;
   const high = Number(localStorage.getItem('tron3d.high') || 0);
   const isHigh = p.score > high;
   if (isHigh) localStorage.setItem('tron3d.high', String(p.score));
 
-  document.getElementById('over-title').textContent = p.alive ? 'VICTORY' : 'CYCLE DERESOLVED';
+  document.getElementById('over-title').textContent = 'CYCLE DERESOLVED';
   document.getElementById('over-score').textContent = p.score;
   document.getElementById('over-kills').textContent = p.eliminations;
   document.getElementById('over-time').textContent = (elapsed - playerStartTime).toFixed(1) + 's';
@@ -2117,6 +2438,7 @@ function gameOver() {
   document.getElementById('over-detail').textContent = isHigh
     ? '★ NEW HIGH SCORE ★'
     : `High score: ${Math.max(high, p.score)}`;
+  document.getElementById('btn-restart').textContent = 'RE-ENGAGE';
   document.getElementById('overlay-over').classList.remove('hidden');
   audio.stopEngine();
   audio.stopMusic();
@@ -2167,7 +2489,14 @@ const hudEls = {
   high:  document.getElementById('highscore'),
   time:  document.getElementById('time'),
   speed: document.getElementById('speed'),
-  ai: [document.getElementById('ai1'), document.getElementById('ai2'), document.getElementById('ai3')],
+  level: document.getElementById('level-display'),
+  ai: [
+    document.getElementById('ai1'),
+    document.getElementById('ai2'),
+    document.getElementById('ai3'),
+    document.getElementById('ai4'),
+    document.getElementById('ai5'),
+  ],
   powerFill: document.getElementById('powerup-fill'),
   powerBar:  document.getElementById('powerup-bar'),
   powerLbl:  document.getElementById('powerup-label'),
@@ -2187,9 +2516,27 @@ function updateHUD() {
   } else {
     hudEls.speed.classList.remove('boosting');
   }
-  for (let i = 0; i < 3; i++) {
-    const ai = world.cycles[i + 1];
+  // Level display: "I" .. "V" for campaign, "W 12" for endless
+  if (hudEls.level) {
+    if (gameMode === 'endless') {
+      hudEls.level.textContent = 'W' + endlessWave;
+    } else if (currentLevel >= 0) {
+      hudEls.level.textContent = levelCfg.name;
+    } else {
+      hudEls.level.textContent = '–';
+    }
+  }
+  // AI roster — show up to 5 slots, hide unused ones (for low-AI levels)
+  const totalCycles = world.cycles.length;
+  for (let i = 0; i < hudEls.ai.length; i++) {
     const el = hudEls.ai[i];
+    const ai = world.cycles[i + 1];  // index 0 is player
+    if (!el) continue;
+    if (i + 1 >= totalCycles) {
+      el.style.display = 'none';
+      continue;
+    }
+    el.style.display = '';
     if (ai.alive) {
       el.className = 'alive';
       el.textContent = `AI-${i + 1} ●`;
@@ -2400,12 +2747,17 @@ function tick() {
       c.trail.syncColors(now);
     }
 
-    // End conditions: player dead → over; only one cycle left → victory
-    if (!world.player.alive) {
-      gameOver();
-    } else {
-      const aliveCount = world.cycles.filter(c => c.alive).length;
-      if (aliveCount <= 1) gameOver();
+    // End conditions:
+    //   - player dead → game over
+    //   - all AIs dead (player alive) → level complete / next wave
+    // The state guard prevents double-fires while the levelcomplete pause runs.
+    if (state === 'play') {
+      if (!world.player.alive) {
+        gameOver();
+      } else {
+        const aliveAIs = world.cycles.filter(c => c.alive && !c.isPlayer).length;
+        if (aliveAIs === 0) showLevelComplete();
+      }
     }
     updateCamera(dt);
     if (audio.started) audio.setEngine(world.player.alive ? 1 : 0, world.player.speed);
@@ -2460,7 +2812,7 @@ tick();
 // ───────────────────────────────────────────────────────────────────────────
 // Expose for debugging (no-op for end users)
 // ───────────────────────────────────────────────────────────────────────────
-window.__tron = { world: () => world, getCycles: () => world.cycles, CONFIG, COLORS };
+window.__tron = { world: () => world, getCycles: () => world.cycles, CONFIG, COLORS, LEVELS, endlessConfig, getState: () => state, getGameMode: () => gameMode, getLevelCfg: () => levelCfg, getCurrentLevel: () => currentLevel, getEndlessWave: () => endlessWave, getEndlessUnlocked: () => endlessUnlocked, startGame, restart, nextLevel, showVictory, updateStartOverlayMode };
 </script>
 </body>
 </html>
